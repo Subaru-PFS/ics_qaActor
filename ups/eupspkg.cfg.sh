@@ -1,3 +1,5 @@
+config() { :; }
+
 install() {
     echo "==> [EUPS] Building and installing via pip..."
 

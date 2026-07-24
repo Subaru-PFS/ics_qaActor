@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools >= 77.0.3", "wheel", "lsst-versions"]
+requires = ["setuptools >= 77.0.3", "lsst-versions"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -34,15 +34,9 @@ dev = [
     "pytest-cov>=4.1.0",
 ]
 
-# ==============================================================================
-# SETUPTOOLS PACKAGE DISCOVERY
-# ==============================================================================
-[tool.setuptools]
-# Crucial for the PFS layout: treats the "python" folder as the installation root
-package-dir = { "" = "python" }
-
 [tool.setuptools.packages.find]
 where = ["python"]
+include = ["qaActor", "qaActor.*"]
 
 # ==============================================================================
 # DYNAMIC VERSION
