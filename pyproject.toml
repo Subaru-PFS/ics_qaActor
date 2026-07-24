@@ -1,0 +1,103 @@
+[build-system]
+requires = ["setuptools >= 77.0.3", "wheel", "lsst-versions"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ics-qa-actor"
+dynamic = ["version"]
+description = "ICS QA Actor"
+authors = [
+    { name = "Subaru PFS ICS Team" }
+]
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "PFS Collaboration" }
+classifiers = [
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Intended Audience :: Science/Research",
+]
+keywords = ["astronomy", "spectrograph", "subaru", "pfs", "qa"]
+
+dependencies = [
+    "ics-utils @ git+https://github.com/Subaru-PFS/ics_utils.git",
+    "pfs-instdata @ git+https://github.com/Subaru-PFS/pfs_instdata.git",
+    "pfs-utils @ git+https://github.com/Subaru-PFS/pfs_utils.git",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.3.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+]
+
+# ==============================================================================
+# SETUPTOOLS PACKAGE DISCOVERY
+# ==============================================================================
+[tool.setuptools]
+# Crucial for the PFS layout: treats the "python" folder as the installation root
+package-dir = { "" = "python" }
+
+[tool.setuptools.packages.find]
+where = ["python"]
+
+# ==============================================================================
+# DYNAMIC VERSION
+# ==============================================================================
+[tool.lsst_versions]
+write_to = "python/qaActor/version.py"
+
+# ==============================================================================
+# RUFF LINTER & FORMATTER CONFIGURATION
+# ==============================================================================
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+src = ["python"]
+
+[tool.ruff.lint]
+# Selected rule sets (https://docs.astral.sh/ruff/rules/)
+select = [
+    "E", # pycodestyle errors
+    "W", # pycodestyle warnings
+    "F", # Pyflakes (catches unused imports, undefined variables)
+    "I", # isort (automatically sorts and groups your imports)
+    "N", # pep8-naming (enforces standard Class/variable naming)
+    "D", # pydocstyle (docstring compliance)
+    "UP", # pyupgrade (forces clean, modern Python 3.12 syntax upgrades)
+    "B", # flake8-bugbear (flags common design flaws and sneaky bugs)
+    "C4", # flake8-comprehensions (optimizes list/dict allocations)
+    "SIM", # flake8-simplify (suggests structural code simplifications)
+    "RUF", # Ruff-specific quality checks
+    "N802",
+    "N803",
+    "N806",
+    "N815",
+    "N816",
+]
+
+ignore = [
+    "D100", # Missing docstring in public module (optional, turn off for strict requirements)
+    "D101",
+    "D102",
+    "D103",
+    "D104", # Missing docstring in public package
+    "D105",
+    "D107",
+    "EM101",
+    "TRY003"
+]
+
+[tool.ruff.lint.pydocstyle]
+# Enforces the NumPy docstring convention you requested
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+# Relax strict rules and docstring requirements inside your unit tests
+"tests/**/*.py" = ["D101", "D102", "D103", "S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pfs", "ics", "qaActor"]
