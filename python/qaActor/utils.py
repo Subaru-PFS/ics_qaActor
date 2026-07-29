@@ -1,15 +1,18 @@
-import os
 import logging
+import queue
 import subprocess
-from multiprocessing.queues import JoinableQueue
 
 logger = logging.getLogger(__name__)
 
 
-PIPELINE_PATH = os.path.expandvars("$DRP_QA_DIR/pipelines/drpQA.yaml#imageQualityQa")
-
-
-def run_qa_for_visit(visit_queue: JoinableQueue, input_collections: list[str], output_collection):
+def run_qa_loop(
+    visit_queue: queue.Queue,
+    input_collections: list[str],
+    output_collection: str,
+    pipeline_path: str,
+    datastore: str = "/work/datastore",
+    num_procs: int = 8,
+):
     """The consumer loop running in a background process."""
     while True:
         # Blocks until new message received.
@@ -31,11 +34,11 @@ def run_qa_for_visit(visit_queue: JoinableQueue, input_collections: list[str], o
                 "--log-level", ".=INFO",
                 "--no-log-tty",
                 "run",
-                "-j", "24",
-                "-b", "/work/datastore",
+                "-j", num_procs,
+                "-b", datastore,
                 "-i", input_collections,
                 "-o", output_collection,
-                "-p", PIPELINE_PATH,
+                "-p", pipeline_path,
                 "-d", f"visit = {visit_id}",
                 "--extend-run",
             ]
@@ -45,7 +48,7 @@ def run_qa_for_visit(visit_queue: JoinableQueue, input_collections: list[str], o
         except Exception as e:
             logger.warning(f"Error processing {visit_id=}: {e}")
         finally:
-            visit_queue.task_done()
+            pass
 
 
 def run_pipetask(cmd, visit_id):
