@@ -67,7 +67,6 @@ select = [
     "SIM", # flake8-simplify (suggests structural code simplifications)
     "RUF", # Ruff-specific quality checks
     "N802",
-    "N803",
     "N806",
     "N815",
     "N816",
@@ -82,7 +81,9 @@ ignore = [
     "D105",
     "D107",
     "EM101",
-    "TRY003"
+    "TRY003",
+    "N803",
+    "N999"
 ]
 
 [tool.ruff.lint.pydocstyle]

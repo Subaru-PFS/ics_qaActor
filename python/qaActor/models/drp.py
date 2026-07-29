@@ -1,15 +1,17 @@
-from multiprocessing.queues import JoinableQueue
+import queue
+from typing import override
 
 from actorcore.Actor import Actor
 
 
 class Drp:
-    def __init__(self, *, actor: Actor, processing_queue: JoinableQueue, logger):
+    def __init__(self, *, actor: Actor, visit_queue: queue.Queue, logger):
 
         self.actor = actor
         self.logger = logger
-        self.queue = processing_queue
+        self.queue = visit_queue
 
+    @override
     def receiveStatusKeys(self, key):
 
         self.logger.info(
