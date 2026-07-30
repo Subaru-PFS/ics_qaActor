@@ -11,9 +11,6 @@ class QaCmd:
             ("ping", "", self.ping),
             ("status", "", self.status),
             ("show", "", self.show),
-            ("start", "", self.start_worker),
-            ("stop", "", self.stop_worker),
-            ("restart", "", self.restart_worker),
             ("process", "<visit_id>", self.process_visit),
         ]
         self.keys = keys.KeysDictionary(
@@ -49,18 +46,6 @@ class QaCmd:
             except Exception as e:
                 cmd.warn(f'text="QaCmd.show: {n}: {e}"')
         cmd.finish()
-
-    def start_worker(self, cmd):
-        """Start the QA worker thread."""
-        self._get_controller().start(cmd=cmd)
-
-    def stop_worker(self, cmd):
-        """Stop the QA worker thread."""
-        self._get_controller().stop(cmd=cmd)
-
-    def restart_worker(self, cmd):
-        """Restart the QA worker thread."""
-        self._get_controller().restart(cmd=cmd)
 
     def process_visit(self, cmd):
         """Manually enqueue a visit_id for QA processing."""

@@ -16,8 +16,9 @@ class QaActor(ICC):
 
     @override
     def connectionMade(self):
-        self.logger.info("Connection made — starting QA supervisor")
+        self.logger.info("Connection made — starting QA controller")
 
+        # Attaching the controller starts its processing loop.
         self.attachAllControllers()
 
         _models = ("drp",)
@@ -30,12 +31,10 @@ class QaActor(ICC):
         self.models["drp"].keyVarDict["reduceExposureStatus"].addCallback(
             self.drp.receiveStatusKeys, callNow=False
         )
-        self.controllers["qa"].start()
 
     @override
     def connectionLost(self, reason):
-        self.logger.info("Connection lost — stopping QA supervisor")
-        self.controllers["qa"].stop()
+        self.logger.info(f"Connection lost: {reason}")
 
 
 def main():

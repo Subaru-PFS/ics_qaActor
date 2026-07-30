@@ -1,4 +1,3 @@
-import enum
 import logging
 import os
 import queue
@@ -7,35 +6,16 @@ import threading
 from qaActor.utils import run_qa_loop
 
 
-class QaMode(enum.IntFlag):
-    OFF = 0
-    ON = 1
-    STOP = 32
+class qa(threading.Thread):
+    """QA processing loop.
 
-
-class QaThread(threading.Thread):
-    def __init__(self, visit_queue, input_collections, output_collection, pipeline_path, datastore):
-        super().__init__(daemon=True, name="QaThread")
-        self.visit_queue = visit_queue
-        self.input_collections = input_collections
-        self.output_collection = output_collection
-        self.pipeline_path = pipeline_path
-        self.datastore = datastore
-
-    def run(self):
-        run_qa_loop(
-            visit_queue=self.visit_queue,
-            input_collections=self.input_collections,
-            output_collection=self.output_collection,
-            pipeline_path=self.pipeline_path,
-            datastore=self.datastore,
-        )
-
-
-class QaSupervisor:
-    Mode = QaMode
+    Runs for the lifetime of the actor: `start` and `stop` are the controller
+    lifecycle hooks called by `ICC.attachController` / `ICC.detachController`,
+    not user-facing commands.
+    """
 
     def __init__(self, actor, name: str, logLevel: int = logging.DEBUG):
+        super().__init__(daemon=True, name=name)
         self.actor = actor
         self.logger = actor.logger
         self.logger.setLevel(logLevel)
@@ -53,69 +33,41 @@ class QaSupervisor:
         self.output_collection = cfg["butler"]["output"]
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
 
-        self.mode = QaMode.OFF
         self.processing_queue = queue.Queue()
-        self._thread = None
 
     def start(self, cmd=None):
-        """Start the QA worker thread and register the drp model callback."""
-        if self.mode == QaMode.ON:
-            msg = "QA worker is already running"
-            self.logger.warning(msg)
-            if cmd:
-                cmd.warn(f'text="{msg}"')
-                cmd.finish()
-            return
-
-        self.logger.info("Starting QA worker thread")
+        """Start the QA processing loop."""
+        self.logger.info("Starting QA processing loop")
         self.logger.info(f"Pipeline path: {self.pipeline_path}")
         self.logger.info(f"Datastore: {self.datastore}")
         self.logger.info(f"Input collections: {self.input_collections}")
         self.logger.info(f"Output collection: {self.output_collection}")
 
-        self._thread = QaThread(
+        super().start()
+
+        if cmd:
+            cmd.inform('text="QA processing loop started"')
+
+    def stop(self, cmd=None):
+        """Ask the QA processing loop to exit.
+
+        The thread is a daemon, so it also goes away with the actor process; the
+        sentinel just lets an idle loop unblock and exit cleanly.
+        """
+        self.logger.info("Stopping QA processing loop")
+        self.processing_queue.put(None)
+
+        if cmd:
+            cmd.inform('text="QA processing loop stopped"')
+
+    def run(self):
+        run_qa_loop(
             visit_queue=self.processing_queue,
             input_collections=self.input_collections,
             output_collection=self.output_collection,
             pipeline_path=self.pipeline_path,
             datastore=self.datastore,
         )
-        self._thread.start()
-        self.mode = QaMode.ON
-
-        self.logger.info("QA worker thread started")
-        if cmd:
-            cmd.inform('text="QA worker started"')
-            cmd.finish()
-
-    def stop(self, cmd=None):
-        """Stop the QA worker thread."""
-        if self.mode != QaMode.ON:
-            msg = "QA worker is not running"
-            self.logger.warning(msg)
-            if cmd:
-                cmd.warn(f'text="{msg}"')
-                cmd.finish()
-            return
-
-        self.logger.info("Stopping QA worker thread")
-        self.mode = QaMode.STOP
-        self.processing_queue.put(None)
-        if self._thread is not None:
-            self._thread.join()
-            self._thread = None
-        self.mode = QaMode.OFF
-
-        self.logger.info("QA worker thread stopped")
-        if cmd:
-            cmd.inform('text="QA worker stopped"')
-            cmd.finish()
-
-    def restart(self, cmd=None):
-        """Restart the QA worker thread."""
-        self.logger.info("Restarting QA worker thread")
-        self.stop()
-        self.start(cmd=cmd)
 
     def enqueue_visit(self, visit_id):
         """Enqueue a visit for QA processing (called by the Drp model)."""
@@ -124,7 +76,3 @@ class QaSupervisor:
     def queue_size(self):
         """Return the current number of visits waiting in the queue."""
         return self.processing_queue.qsize()
-
-
-# Backward-compat alias
-qa = QaSupervisor

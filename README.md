@@ -17,18 +17,17 @@ drpActor  --[reduceExposureStatus]--> qaActor (Drp model callback)
                                           |
                                      queue.Queue
                                           |
-                                    QaThread (daemon)
+                                    qa controller
+                                    (daemon thread)
                                           |
                                       pipetask
                                    (drpQA pipeline)
 ```
 
-The actor follows the ICS supervisor pattern (Commands → Supervisor → Domain logic):
-
-- **`main.py`** — `QaActor(ICC)` entry point; wires models and controllers on connect/disconnect.
+- **`main.py`** — `QaActor(ICC)` entry point; wires models and controllers on connect.
 - **`models/drp.py`** — `Drp` class; MHS callback that validates incoming keys and enqueues visit IDs.
-- **`Controllers/qa.py`** — `QaSupervisor` + `QaThread`; owns the worker thread lifecycle and exposes a clean API to the
-  command layer.
+- **`Controllers/qa.py`** — `qa` controller; a daemon thread running the QA processing loop for the lifetime of the
+  actor. It is started when the controller is attached and exposes the queue API to the command layer.
 - **`Commands/QaCmd.py`** — MHS command handler.
 - **`utils.py`** — `run_qa_loop` consumer loop and `run_pipetask` subprocess wrapper.
 
@@ -75,10 +74,9 @@ The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipel
 | `ping`               | Returns the product name; used as a liveness check                                                      |
 | `status`             | Reports the current processing queue depth                                                              |
 | `show`               | Dumps all key-value pairs from all subscribed MHS models                                                |
-| `start`              | Starts the QA worker thread (begins processing queued visits)                                           |
-| `stop`               | Stops the QA worker thread gracefully                                                                   |
-| `restart`            | Stops and restarts the QA worker thread                                                                 |
 | `process <visit_id>` | Manually enqueues a visit ID for QA processing (bypasses the automatic `reduceExposureStatus` listener) |
+
+The processing loop runs whenever the actor is running; stop or restart the actor itself rather than the loop.
 
 ## License
 
