@@ -1,64 +1,44 @@
 #!/usr/bin/env python
 
 import argparse
-import multiprocessing
+from typing import override
 
-from actorcore.Actor import Actor
+from actorcore.ICC import ICC
 
-from qaActor.drp import Drp
-from qaActor.utils import run_qa_for_visit
+from qaActor.models.drp import Drp
 
 
-class QaActor(Actor):
+class QaActor(ICC):
     def __init__(self, name, **kwargs):
+        self.allControllers = ["qa"]
+        self.drp = None
         super().__init__(name, **kwargs)
 
-        self._is_connected = False
-        self.drp = None
-
-        # TODO update these and use instdata.
-        input_collections = "PFS/calib/pipe2d-1861/run29/calib.20260708b,drpActor/reductions,PFS/defaults"
-        output_collection = "qaActor/reductions"
-
-        # Set up process queue with no max.
-        self.processing_queue: multiprocessing.JoinableQueue = multiprocessing.JoinableQueue()
-        self.worker = multiprocessing.Process(
-            target=run_qa_for_visit,
-            args=(self.processing_queue, input_collections, output_collection),
-            daemon=True,
-        )
-
+    @override
     def connectionMade(self):
-        if not self._is_connected:
-            self.logger.info("Setting up qaActor to listen for reduceExposureStatus key from drp...")
-            self._is_connected = True
+        self.logger.info("Connection made — starting QA supervisor")
 
-            # Set up model to listen to drpActor and add visit to processing queue.
-            self.drp = Drp(actor=self, processing_queue=self.processing_queue, logger=self.logger)
-            _models = ("drp",)
-            self.addModels(_models)
-            self.models["drp"].keyVarDict["reduceExposureStatus"].addCallback(
-                self.drp.receiveStatusKeys, callNow=False
-            )
+        self.attachAllControllers()
 
-            # Start processing queue.
-            self.logger.info("Starting processing worker.")
-            self.worker.start()
+        _models = ("drp",)
+        self.drp = Drp(actor=self, visit_queue=self.controllers["qa"]._visit_queue, logger=self.logger)
+        self.addModels(_models)
 
+        # Add a listener for when reduceExposure task is complete.
+        self.models["drp"].keyVarDict["reduceExposureStatus"].addCallback(
+            self.drp.receiveStatusKeys, callNow=False
+        )
+        self.controllers["qa"].start()
+
+    @override
     def connectionLost(self, reason):
-        self.logger.info("Shutting down QA processing queue and worker")
-        self.processing_queue.put(None)
-
-        # Wait for the thread to finish processing remaining items
-        self.logger.info("Waiting for QA worker thread to join")
-        self.worker.join()
-        self.logger.info("qaActor shutting down")
-        self._is_connected = False
+        self.logger.info("Connection lost — stopping QA supervisor")
+        self.controllers["qa"].stop()
 
 
 def main():
     parser = argparse.ArgumentParser()
-    args = parser.parse_args()
+    parser.parse_args()
 
     actor = QaActor("qa", productName="qaActor")
     actor.run()

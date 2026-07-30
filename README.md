@@ -8,25 +8,29 @@ exposure is reduced by the `drpActor`.
 
 The actor subscribes to the MHS (Messaging Hub System) and listens for `reduceExposureStatus` keys published by
 `drpActor`. When a new reduction is complete, the visit ID is placed on an internal queue and processed by a background
-worker that runs the `pipetask`-based QA pipeline.
+worker thread that runs the `pipetask`-based QA pipeline.
 
 ## Architecture
 
 ```
-drpActor  --[reduceExposureStatus]--> qaActor (Drp callback)
+drpActor  --[reduceExposureStatus]--> qaActor (Drp model callback)
                                           |
-                                    JoinableQueue
+                                     queue.Queue
                                           |
-                                   background Process
+                                    QaThread (daemon)
                                           |
                                       pipetask
                                    (drpQA pipeline)
 ```
 
-- **`main.py`** — `QaActor` class; manages the MHS connection, the processing queue, and the worker process.
-- **`drp.py`** — `Drp` class; MHS callback that validates incoming keys and enqueues visit IDs.
-- **`utils.py`** — `run_qa_for_visit` consumer loop and `run_pipetask` subprocess wrapper.
-- **`Commands/QaCmd.py`** — MHS command handler (`ping`, `status`, `show`).
+The actor follows the ICS supervisor pattern (Commands → Supervisor → Domain logic):
+
+- **`main.py`** — `QaActor(ICC)` entry point; wires models and controllers on connect/disconnect.
+- **`models/drp.py`** — `Drp` class; MHS callback that validates incoming keys and enqueues visit IDs.
+- **`Controllers/qa.py`** — `QaSupervisor` + `QaThread`; owns the worker thread lifecycle and exposes a clean API to the
+  command layer.
+- **`Commands/QaCmd.py`** — MHS command handler.
+- **`utils.py`** — `run_qa_loop` consumer loop and `run_pipetask` subprocess wrapper.
 
 ## Prerequisites
 
@@ -39,20 +43,22 @@ drpActor  --[reduceExposureStatus]--> qaActor (Drp callback)
 
 ## Configuration
 
-The following values are currently hardcoded in `main.py` and should be updated to match the active calibration products
-before deployment:
+All runtime configuration is read from `pfs_instdata/config/actors/qa.yaml` via `actor.actorConfig`. No values are
+hardcoded in the source.
 
-| Variable            | Location   | Description                                             |
-|---------------------|------------|---------------------------------------------------------|
-| `input_collections` | `main.py`  | Butler input collections (calibs, reductions, defaults) |
-| `output_collection` | `main.py`  | Butler output collection for QA results                 |
-| `/work/datastore`   | `utils.py` | Butler repository (datastore) root path                 |
-
-The QA pipeline is resolved via the `DRP_QA_DIR` environment variable:
-
+```yaml
+engine:
+  butler:
+    datastore: /work/datastore          # Butler repository root
+    input: # Butler input collections
+      - "PFS/calib/..."
+      - "drpActor/reductions"
+      - "PFS/defaults"
+    output: qaActor/reductions          # Butler output collection
+  pipeline: "$DRP_QA_DIR/pipelines/drpQA.yaml"  # resolved at runtime
 ```
-$DRP_QA_DIR/pipelines/drpQA.yaml#imageQualityQa
-```
+
+The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipeline package.
 
 ## MHS Interface
 
@@ -64,11 +70,15 @@ $DRP_QA_DIR/pipelines/drpQA.yaml#imageQualityQa
 
 ### Commands accepted
 
-| Command  | Description                                                |
-|----------|------------------------------------------------------------|
-| `ping`   | Returns the product name; used as a liveness check         |
-| `status` | Reports the version key and current processing queue depth |
-| `show`   | Dumps all key-value pairs from all subscribed MHS models   |
+| Command              | Description                                                                                             |
+|----------------------|---------------------------------------------------------------------------------------------------------|
+| `ping`               | Returns the product name; used as a liveness check                                                      |
+| `status`             | Reports the current processing queue depth                                                              |
+| `show`               | Dumps all key-value pairs from all subscribed MHS models                                                |
+| `start`              | Starts the QA worker thread (begins processing queued visits)                                           |
+| `stop`               | Stops the QA worker thread gracefully                                                                   |
+| `restart`            | Stops and restarts the QA worker thread                                                                 |
+| `process <visit_id>` | Manually enqueues a visit ID for QA processing (bypasses the automatic `reduceExposureStatus` listener) |
 
 ## License
 
