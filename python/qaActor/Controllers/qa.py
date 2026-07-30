@@ -43,8 +43,13 @@ class QaSupervisor:
         self.logger.info(f"Setting up QA with {name=}")
 
         cfg = actor.actorConfig["engine"]
+
         self.datastore = cfg["butler"]["datastore"]
+
         self.input_collections = cfg["butler"]["input"]
+        if isinstance(self.input_collections, list):
+            self.input_collections = ",".join(self.input_collections)
+
         self.output_collection = cfg["butler"]["output"]
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
 

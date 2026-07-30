@@ -34,7 +34,7 @@ def run_qa_loop(
                 "--log-level", ".=INFO",
                 "--no-log-tty",
                 "run",
-                "-j", num_procs,
+                "-j", f"{num_procs}",
                 "-b", datastore,
                 "-i", input_collections,
                 "-o", output_collection,
