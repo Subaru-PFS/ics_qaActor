@@ -26,10 +26,10 @@ drpActor  --[reduceExposureStatus]--> qaActor (Drp model callback)
 
 - **`main.py`** — `QaActor(ICC)` entry point; wires models and controllers on connect.
 - **`models/drp.py`** — `Drp` class; MHS callback that validates incoming keys and enqueues visit IDs.
-- **`Controllers/qa.py`** — `qa` controller; a daemon thread running the QA processing loop for the lifetime of the
-  actor. It is started when the controller is attached and exposes the queue API to the command layer.
+- **`Controllers/qa.py`** — `qa` controller; a daemon thread whose `run` method is the QA consumer loop, alive for the
+  lifetime of the actor. It is started when the controller is attached, builds and runs the `pipetask` command for each
+  visit, and exposes the queue API to the command layer.
 - **`Commands/QaCmd.py`** — MHS command handler.
-- **`utils.py`** — `run_qa_loop` consumer loop and `run_pipetask` subprocess wrapper.
 
 ## Prerequisites
 

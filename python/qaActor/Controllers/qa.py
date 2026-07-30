@@ -1,12 +1,11 @@
 import logging
 import os
 import queue
+import subprocess
 import threading
 
-from qaActor.utils import run_qa_loop
 
-
-class qa(threading.Thread):
+class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController
     """QA processing loop.
 
     Runs for the lifetime of the actor: `start` and `stop` are the controller
@@ -32,6 +31,7 @@ class qa(threading.Thread):
 
         self.output_collection = cfg["butler"]["output"]
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
+        self.num_procs = cfg.get("num_procs", 8)
 
         self.processing_queue = queue.Queue()
 
@@ -61,13 +61,56 @@ class qa(threading.Thread):
             cmd.inform('text="QA processing loop stopped"')
 
     def run(self):
-        run_qa_loop(
-            visit_queue=self.processing_queue,
-            input_collections=self.input_collections,
-            output_collection=self.output_collection,
-            pipeline_path=self.pipeline_path,
-            datastore=self.datastore,
-        )
+        """Consume visits from the queue and run the QA pipeline on each."""
+        while True:
+            self.logger.info("Waiting for visits on the QA processing queue")
+            # Blocks until a visit is enqueued.
+            visit_id = self.processing_queue.get()
+
+            # `stop` enqueues None as the shutdown sentinel.
+            if visit_id is None:
+                self.logger.info("Received the stop sentinel, exiting QA processing loop")
+                break
+
+            try:
+                self.logger.info(f"Processing visit: {visit_id}")
+                self.run_pipetask(visit_id)
+            except Exception as e:
+                self.logger.warning(f"Error processing {visit_id=}: {e}")
+
+    def pipetask_cmd(self, visit_id):
+        """Build the pipetask command line for a single visit."""
+        # fmt: off
+        return [
+            "pipetask",
+            "--long-log",
+            "--log-level", ".=INFO",
+            "--no-log-tty",
+            "run",
+            "-j", f"{self.num_procs}",
+            "-b", self.datastore,
+            "-i", self.input_collections,
+            "-o", self.output_collection,
+            "-p", self.pipeline_path,
+            "-d", f"visit = {visit_id}",
+            "--extend-run",
+        ]
+        # fmt: on
+
+    def run_pipetask(self, visit_id):
+        """Run the QA pipeline for a single visit, relaying pipetask output to the log."""
+        cmd = self.pipetask_cmd(visit_id)
+        self.logger.info(f"Running: {' '.join(cmd)}")
+
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in process.stdout:
+            self.logger.info(line.rstrip())
+        process.wait()
+
+        if process.returncode != 0:
+            self.logger.warning(f"QA pipetask failed for {visit_id=} (returncode {process.returncode})")
+        else:
+            self.logger.info(f"QA complete for {visit_id=}")
 
     def enqueue_visit(self, visit_id):
         """Enqueue a visit for QA processing (called by the Drp model)."""
