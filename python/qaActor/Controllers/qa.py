@@ -1,4 +1,5 @@
 import enum
+import logging
 import os
 import queue
 import threading
@@ -34,9 +35,12 @@ class QaThread(threading.Thread):
 class QaSupervisor:
     Mode = QaMode
 
-    def __init__(self, actor):
+    def __init__(self, actor, name: str, logLevel: int = logging.DEBUG):
         self.actor = actor
         self.logger = actor.logger
+        self.logger.setLevel(logLevel)
+
+        self.logger.info(f"Setting up QA with {name=}")
 
         cfg = actor.actorConfig["engine"]
         self.datastore = cfg["butler"]["datastore"]
