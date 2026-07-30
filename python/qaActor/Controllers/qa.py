@@ -102,30 +102,19 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         cmd = self.pipetask_cmd(visit_id)
         self.logger.info(f"Running: {' '.join(cmd)}")
 
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-        stdout_lines = []
-        stderr_lines = []
+        # pipetask writes its own log to stderr, so fold it into stdout: a single
+        # stream is all that streams reliably from one reader thread, and there is
+        # no second pipe left undrained to fill up and block the child.
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
         for line in process.stdout:
-            line = line.rstrip()
-            stdout_lines.append(line)
-            self.logger.info(line)
-
-        for line in process.stderr:
-            line = line.rstrip()
-            stderr_lines.append(line)
-            self.logger.warning(f"STDERR: {line}")
+            self.logger.info(line.rstrip())
 
         process.wait()
 
         if process.returncode != 0:
             self.logger.warning(f"QA pipetask failed for {visit_id=} (returncode {process.returncode})")
             self.logger.warning(f"Failed command: {' '.join(cmd)}")
-            if stderr_lines:
-                self.logger.warning(f"Error output ({len(stderr_lines)} lines):")
-                for line in stderr_lines:
-                    self.logger.warning(f"  {line}")
         else:
             self.logger.info(f"QA complete for {visit_id=}")
 
