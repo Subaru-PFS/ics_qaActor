@@ -16,24 +16,25 @@ class QaActor(ICC):
 
     @override
     def connectionMade(self):
-        self.logger.info("Connection made — starting QA supervisor")
+        self.logger.info("Connection made — starting QA controller")
 
+        # Attaching the controller starts its processing loop.
         self.attachAllControllers()
 
         _models = ("drp",)
-        self.drp = Drp(actor=self, visit_queue=self.controllers["qa"]._visit_queue, logger=self.logger)
+        self.drp = Drp(
+            actor=self, processing_queue=self.controllers["qa"].processing_queue, logger=self.logger
+        )
         self.addModels(_models)
 
         # Add a listener for when reduceExposure task is complete.
         self.models["drp"].keyVarDict["reduceExposureStatus"].addCallback(
             self.drp.receiveStatusKeys, callNow=False
         )
-        self.controllers["qa"].start()
 
     @override
     def connectionLost(self, reason):
-        self.logger.info("Connection lost — stopping QA supervisor")
-        self.controllers["qa"].stop()
+        self.logger.info(f"Connection lost: {reason}")
 
 
 def main():

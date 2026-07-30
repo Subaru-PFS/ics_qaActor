@@ -39,6 +39,28 @@ where = ["python"]
 include = ["qaActor", "qaActor.*"]
 
 # ==============================================================================
+# PYTEST
+# ==============================================================================
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["python"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+
+# ==============================================================================
+# COVERAGE
+# ==============================================================================
+[tool.coverage.run]
+source = ["qaActor"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+]
+
+# ==============================================================================
 # DYNAMIC VERSION
 # ==============================================================================
 [tool.lsst_versions]
@@ -66,7 +88,6 @@ select = [
     "C4", # flake8-comprehensions (optimizes list/dict allocations)
     "SIM", # flake8-simplify (suggests structural code simplifications)
     "RUF", # Ruff-specific quality checks
-    "N802",
     "N806",
     "N815",
     "N816",
@@ -82,6 +103,7 @@ ignore = [
     "D107",
     "EM101",
     "TRY003",
+    "N802",
     "N803",
     "N999"
 ]

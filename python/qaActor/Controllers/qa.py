@@ -1,41 +1,20 @@
-import enum
 import logging
 import os
 import queue
+import subprocess
 import threading
 
-from qaActor.utils import run_qa_loop
 
+class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController
+    """QA processing loop.
 
-class QaMode(enum.IntFlag):
-    OFF = 0
-    ON = 1
-    STOP = 32
-
-
-class QaThread(threading.Thread):
-    def __init__(self, visit_queue, input_collections, output_collection, pipeline_path, datastore):
-        super().__init__(daemon=True, name="QaThread")
-        self.visit_queue = visit_queue
-        self.input_collections = input_collections
-        self.output_collection = output_collection
-        self.pipeline_path = pipeline_path
-        self.datastore = datastore
-
-    def run(self):
-        run_qa_loop(
-            visit_queue=self.visit_queue,
-            input_collections=self.input_collections,
-            output_collection=self.output_collection,
-            pipeline_path=self.pipeline_path,
-            datastore=self.datastore,
-        )
-
-
-class QaSupervisor:
-    Mode = QaMode
+    Runs for the lifetime of the actor: `start` and `stop` are the controller
+    lifecycle hooks called by `ICC.attachController` / `ICC.detachController`,
+    not user-facing commands.
+    """
 
     def __init__(self, actor, name: str, logLevel: int = logging.DEBUG):
+        super().__init__(daemon=True, name=name)
         self.actor = actor
         self.logger = actor.logger
         self.logger.setLevel(logLevel)
@@ -52,74 +31,93 @@ class QaSupervisor:
 
         self.output_collection = cfg["butler"]["output"]
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
+        self.num_procs = cfg.get("num_procs", 8)
 
-        self.mode = QaMode.OFF
-        self._visit_queue = queue.Queue()
-        self._thread = None
+        self.processing_queue = queue.Queue()
 
     def start(self, cmd=None):
-        """Start the QA worker thread and register the drp model callback."""
-        if self.mode == QaMode.ON:
-            msg = "QA worker is already running"
-            self.logger.warning(msg)
-            if cmd:
-                cmd.warn(f'text="{msg}"')
-                cmd.finish()
-            return
+        """Start the QA processing loop."""
+        self.logger.info("Starting QA processing loop")
+        self.logger.info(f"Pipeline path: {self.pipeline_path}")
+        self.logger.info(f"Datastore: {self.datastore}")
+        self.logger.info(f"Input collections: {self.input_collections}")
+        self.logger.info(f"Output collection: {self.output_collection}")
 
-        self.logger.info("Starting QA worker thread")
-        self._thread = QaThread(
-            visit_queue=self._visit_queue,
-            input_collections=self.input_collections,
-            output_collection=self.output_collection,
-            pipeline_path=self.pipeline_path,
-            datastore=self.datastore,
-        )
-        self._thread.start()
-        self.mode = QaMode.ON
+        super().start()
 
-        self.logger.info("QA worker thread started")
         if cmd:
-            cmd.inform('text="QA worker started"')
+            cmd.inform('text="QA processing loop started"')
             cmd.finish()
 
     def stop(self, cmd=None):
-        """Stop the QA worker thread."""
-        if self.mode != QaMode.ON:
-            msg = "QA worker is not running"
-            self.logger.warning(msg)
-            if cmd:
-                cmd.warn(f'text="{msg}"')
-                cmd.finish()
-            return
+        """Ask the QA processing loop to exit.
 
-        self.logger.info("Stopping QA worker thread")
-        self.mode = QaMode.STOP
-        self._visit_queue.put(None)
-        if self._thread is not None:
-            self._thread.join()
-            self._thread = None
-        self.mode = QaMode.OFF
+        The thread is a daemon, so it also goes away with the actor process; the
+        sentinel just lets an idle loop unblock and exit cleanly.
+        """
+        self.logger.info("Stopping QA processing loop")
+        self.processing_queue.put(None)
 
-        self.logger.info("QA worker thread stopped")
         if cmd:
-            cmd.inform('text="QA worker stopped"')
+            cmd.inform('text="QA processing loop stopped"')
             cmd.finish()
 
-    def restart(self, cmd=None):
-        """Restart the QA worker thread."""
-        self.logger.info("Restarting QA worker thread")
-        self.stop()
-        self.start(cmd=cmd)
+    def run(self):
+        """Consume visits from the queue and run the QA pipeline on each."""
+        while True:
+            self.logger.info("Waiting for visits on the QA processing queue")
+            # Blocks until a visit is enqueued.
+            visit_id = self.processing_queue.get()
+
+            # `stop` enqueues None as the shutdown sentinel.
+            if visit_id is None:
+                self.logger.info("Received the stop sentinel, exiting QA processing loop")
+                break
+
+            try:
+                self.logger.info(f"Processing visit: {visit_id}")
+                self.run_pipetask(visit_id)
+            except Exception as e:
+                self.logger.warning(f"Error processing {visit_id=}: {e}")
+
+    def pipetask_cmd(self, visit_id):
+        """Build the pipetask command line for a single visit."""
+        # fmt: off
+        return [
+            "pipetask",
+            "--long-log",
+            "--log-level", ".=INFO",
+            "--no-log-tty",
+            "run",
+            "-j", f"{self.num_procs}",
+            "-b", self.datastore,
+            "-i", self.input_collections,
+            "-o", self.output_collection,
+            "-p", self.pipeline_path,
+            "-d", f"visit = {visit_id}",
+            "--extend-run",
+        ]
+        # fmt: on
+
+    def run_pipetask(self, visit_id):
+        """Run the QA pipeline for a single visit, relaying pipetask output to the log."""
+        cmd = self.pipetask_cmd(visit_id)
+        self.logger.info(f"Running: {' '.join(cmd)}")
+
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in process.stdout:
+            self.logger.info(line.rstrip())
+        process.wait()
+
+        if process.returncode != 0:
+            self.logger.warning(f"QA pipetask failed for {visit_id=} (returncode {process.returncode})")
+        else:
+            self.logger.info(f"QA complete for {visit_id=}")
 
     def enqueue_visit(self, visit_id):
         """Enqueue a visit for QA processing (called by the Drp model)."""
-        self._visit_queue.put(visit_id)
+        self.processing_queue.put(visit_id)
 
     def queue_size(self):
         """Return the current number of visits waiting in the queue."""
-        return self._visit_queue.qsize()
-
-
-# Backward-compat alias
-qa = QaSupervisor
+        return self.processing_queue.qsize()
