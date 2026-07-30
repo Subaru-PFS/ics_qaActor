@@ -47,6 +47,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
 
         if cmd:
             cmd.inform('text="QA processing loop started"')
+            cmd.finish()
 
     def stop(self, cmd=None):
         """Ask the QA processing loop to exit.
@@ -59,6 +60,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
 
         if cmd:
             cmd.inform('text="QA processing loop stopped"')
+            cmd.finish()
 
     def run(self):
         """Consume visits from the queue and run the QA pipeline on each."""
