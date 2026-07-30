@@ -68,7 +68,6 @@ class QaSupervisor:
             return
 
         self.logger.info("Starting QA worker thread")
-        self._visit_queue = queue.Queue()
         self._thread = QaThread(
             visit_queue=self._visit_queue,
             input_collections=self.input_collections,
