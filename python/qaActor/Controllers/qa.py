@@ -35,6 +35,8 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
 
         self.processing_queue = queue.Queue()
 
+        self._current_visit = None
+
     def start(self, cmd=None):
         """Start the QA processing loop."""
         self.logger.info("Starting QA processing loop")
@@ -75,10 +77,13 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
                 break
 
             try:
+                self._current_visit = visit_id
                 self.logger.info(f"Processing visit: {visit_id}")
                 self.run_pipetask(visit_id)
             except Exception as e:
                 self.logger.warning(f"Error processing {visit_id=}: {e}")
+            finally:
+                self._current_visit = None
 
     def pipetask_cmd(self, visit_id):
         """Build the pipetask command line for a single visit."""
@@ -125,3 +130,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
     def queue_size(self):
         """Return the current number of visits waiting in the queue."""
         return self.processing_queue.qsize()
+
+    def current_visit(self):
+        """Return the visit being processed right now, or None if the loop is idle."""
+        return self._current_visit

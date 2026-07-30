@@ -99,6 +99,9 @@ class TestInit:
         assert isinstance(controller.processing_queue, queue.Queue)
         assert controller.queue_size() == 0
 
+    def test_starts_with_no_visit_in_flight(self, controller):
+        assert controller.current_visit() is None
+
     def test_sets_the_requested_log_level(self, actor, drpQaDir):
         qa(actor, "qa", logLevel=logging.WARNING)
         assert actor.logger.level == logging.WARNING
@@ -294,6 +297,49 @@ class TestRunLoop:
 
         assert seen == [1, 2], "a failed visit must not stop later visits"
         assert "Error processing visit_id=1: pipetask exploded" in caplog.text
+
+    def test_tracks_the_visit_while_it_is_being_processed(self, controller):
+        seen = []
+        controller.run_pipetask = lambda visitId: seen.append(controller.current_visit())
+
+        controller.enqueue_visit(4242)
+        controller.stop()
+
+        controller.run()
+
+        assert seen == [4242], "current_visit must be set for the duration of the run"
+
+    def test_clears_the_current_visit_when_the_visit_finishes(self, controller):
+        controller.run_pipetask = lambda visitId: None
+
+        controller.enqueue_visit(4242)
+        controller.stop()
+
+        controller.run()
+
+        assert controller.current_visit() is None
+
+    def test_clears_the_current_visit_when_the_visit_fails(self, controller, caplog):
+        def boom(visitId):
+            raise RuntimeError("pipetask exploded")
+
+        controller.run_pipetask = boom
+
+        controller.enqueue_visit(4242)
+        controller.stop()
+
+        with caplog.at_level(logging.INFO):
+            controller.run()
+
+        assert controller.current_visit() is None, "a failed visit must not stay in flight"
+
+    def test_the_sentinel_is_never_reported_as_the_current_visit(self, controller):
+        controller.run_pipetask = lambda visitId: None
+        controller.stop()
+
+        controller.run()
+
+        assert controller.current_visit() is None
 
     def test_leaves_nothing_behind_in_the_queue(self, controller):
         controller.run_pipetask = lambda visitId: None

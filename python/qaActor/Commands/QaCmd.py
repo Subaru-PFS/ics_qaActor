@@ -30,10 +30,16 @@ class QaCmd:
 
     def status(self, cmd):
         """Return status keywords."""
-        # Show the number of items in the queue.
-        q_size = self._get_controller().queue_size()
+        controller = self._get_controller()
 
-        cmd.inform(f'text="QA processing queue size: {q_size}"')
+        # Show the visit being worked on, then the number of items still queued.
+        visit_id = controller.current_visit()
+        if visit_id is None:
+            cmd.inform('text="QA currently processing: idle"')
+        else:
+            cmd.inform(f'text="QA currently processing: {visit_id}"')
+
+        cmd.inform(f'text="QA processing queue size: {controller.queue_size()}"')
         cmd.finish()
 
     def show(self, cmd):

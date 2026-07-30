@@ -68,9 +68,12 @@ class TestPing:
 
 
 class TestStatus:
-    def test_reports_an_empty_queue(self, qaCmd, cmd):
+    def test_reports_an_empty_queue_and_an_idle_loop(self, qaCmd, cmd):
         qaCmd.status(cmd)
-        assert cmd.informs == ['text="QA processing queue size: 0"']
+        assert cmd.informs == [
+            'text="QA currently processing: idle"',
+            'text="QA processing queue size: 0"',
+        ]
         assert cmd.finished
 
     def test_reports_the_live_queue_depth(self, qaCmd, cmd, controller):
@@ -79,7 +82,31 @@ class TestStatus:
 
         qaCmd.status(cmd)
 
-        assert cmd.informs == ['text="QA processing queue size: 2"']
+        assert 'text="QA processing queue size: 2"' in cmd.informs
+
+    def test_reports_the_visit_being_processed(self, qaCmd, cmd, controller):
+        controller._current_visit = 12345
+
+        qaCmd.status(cmd)
+
+        assert cmd.informs == [
+            'text="QA currently processing: 12345"',
+            'text="QA processing queue size: 0"',
+        ]
+        assert cmd.finished
+
+    def test_a_visit_in_flight_is_not_counted_in_the_queue_depth(self, qaCmd, cmd, controller):
+        # The in-flight visit has already been taken off the queue, so the two
+        # numbers are independent: one visit running, one still waiting.
+        controller._current_visit = 12345
+        controller.enqueue_visit(12346)
+
+        qaCmd.status(cmd)
+
+        assert cmd.informs == [
+            'text="QA currently processing: 12345"',
+            'text="QA processing queue size: 1"',
+        ]
 
 
 class TestShow:
