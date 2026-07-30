@@ -68,6 +68,11 @@ class QaSupervisor:
             return
 
         self.logger.info("Starting QA worker thread")
+        self.logger.info(f"Pipeline path: {self.pipeline_path}")
+        self.logger.info(f"Datastore: {self.datastore}")
+        self.logger.info(f"Input collections: {self.input_collections}")
+        self.logger.info(f"Output collection: {self.output_collection}")
+
         self._thread = QaThread(
             visit_queue=self._visit_queue,
             input_collections=self.input_collections,
