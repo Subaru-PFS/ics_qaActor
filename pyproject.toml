@@ -25,6 +25,7 @@ dependencies = [
     "ics-utils @ git+https://github.com/Subaru-PFS/ics_utils.git",
     "pfs-instdata @ git+https://github.com/Subaru-PFS/pfs_instdata.git",
     "pfs-utils @ git+https://github.com/Subaru-PFS/pfs_utils.git",
+    "pfs-drp-qa @ git+https://github.com/Subaru-PFS/drp_qa.git",
 ]
 
 [project.optional-dependencies]
