@@ -31,8 +31,6 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
 
         self.output_collection = cfg["butler"]["output"]
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
-        # Only run the imageQualityQA task for now
-        self.pipeline_path += "#imageQualityQa"
         self.num_procs = cfg.get("num_procs", 8)
 
         self.processing_queue = queue.Queue()
