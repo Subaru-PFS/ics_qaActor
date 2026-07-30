@@ -6,7 +6,6 @@ import opscore.protocols.types as types
 
 class QaCmd:
     def __init__(self, actor):
-
         self.actor = actor
         self.vocab = [
             ("ping", "", self.ping),
@@ -36,7 +35,7 @@ class QaCmd:
         """Return status keywords."""
         # Show the number of items in the queue.
         q_size = self._get_controller().queue_size()
-        self.actor.logger.info(f"QA Processing queue size: {q_size}")
+
         cmd.inform(f'text="QA processing queue size: {q_size}"')
         cmd.finish()
 

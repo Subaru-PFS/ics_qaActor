@@ -21,7 +21,9 @@ class QaActor(ICC):
         self.attachAllControllers()
 
         _models = ("drp",)
-        self.drp = Drp(actor=self, visit_queue=self.controllers["qa"]._visit_queue, logger=self.logger)
+        self.drp = Drp(
+            actor=self, processing_queue=self.controllers["qa"].processing_queue, logger=self.logger
+        )
         self.addModels(_models)
 
         # Add a listener for when reduceExposure task is complete.

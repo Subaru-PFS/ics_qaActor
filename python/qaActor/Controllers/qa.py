@@ -54,7 +54,7 @@ class QaSupervisor:
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
 
         self.mode = QaMode.OFF
-        self._visit_queue = queue.Queue()
+        self.processing_queue = queue.Queue()
         self._thread = None
 
     def start(self, cmd=None):
@@ -74,7 +74,7 @@ class QaSupervisor:
         self.logger.info(f"Output collection: {self.output_collection}")
 
         self._thread = QaThread(
-            visit_queue=self._visit_queue,
+            visit_queue=self.processing_queue,
             input_collections=self.input_collections,
             output_collection=self.output_collection,
             pipeline_path=self.pipeline_path,
@@ -100,7 +100,7 @@ class QaSupervisor:
 
         self.logger.info("Stopping QA worker thread")
         self.mode = QaMode.STOP
-        self._visit_queue.put(None)
+        self.processing_queue.put(None)
         if self._thread is not None:
             self._thread.join()
             self._thread = None
@@ -119,11 +119,11 @@ class QaSupervisor:
 
     def enqueue_visit(self, visit_id):
         """Enqueue a visit for QA processing (called by the Drp model)."""
-        self._visit_queue.put(visit_id)
+        self.processing_queue.put(visit_id)
 
     def queue_size(self):
         """Return the current number of visits waiting in the queue."""
-        return self._visit_queue.qsize()
+        return self.processing_queue.qsize()
 
 
 # Backward-compat alias
