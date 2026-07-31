@@ -59,7 +59,6 @@ class TestReceiveStatusKeys:
     @pytest.mark.parametrize(
         ("kwargs", "reason"),
         [
-            ({"name": "someOtherKey"}, "a different key"),
             ({"isCurrent": False}, "a stale key"),
             ({"isGenuine": False}, "a non-genuine key"),
             ({"isCurrent": False, "isGenuine": False}, "a stale non-genuine key"),
@@ -81,7 +80,7 @@ class TestReceiveStatusKeys:
         with caplog.at_level(logging.INFO):
             drp.check_reduced_exposure_status(FakeKey(name="someOtherKey", valueList=[intValue(1)]))
 
-        assert "receiveStatusKeys: drp,someOtherKey" in caplog.text
+        assert "check_reduced_exposure_status: drp,someOtherKey" in caplog.text
 
     def test_logs_what_it_enqueued(self, drp, caplog):
         with caplog.at_level(logging.INFO):

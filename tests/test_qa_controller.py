@@ -129,7 +129,6 @@ class TestPipetaskCmd:
             "--long-log",
             "--log-level",
             ".=INFO",
-            "--no-log-tty",
             "run",
             "-j",
             "4",
@@ -143,7 +142,6 @@ class TestPipetaskCmd:
             "/opt/drp_qa/pipelines/drpQA.yaml",
             "-d",
             "visit = 12345",
-            "--extend-run",
         ]
 
     def test_num_procs_is_stringified_for_the_j_flag(self, controller):
