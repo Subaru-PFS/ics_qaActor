@@ -21,7 +21,8 @@ class Drp:
         key : actorkeys.Key
             The key object from the DRP actor containing reduceExposureStatus information.
             Expected to have attributes: name, actor, timestamp, isCurrent, isGenuine,
-            and valueList where valueList[0] contains the visit_id.
+            and valueList where valueList[0] contains the visit_id. See
+            `drpActor.utils.engine.processVisitGroup`
 
         Notes
         -----
