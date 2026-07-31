@@ -18,7 +18,6 @@ class QaCmd:
             (1, 1),
             keys.Key("visit_id", types.Int(), help="Visit ID to enqueue for QA processing"),
         )
-        self.config = actor.actorConfig
 
     def _get_controller(self):
         return self.actor.controllers["qa"]

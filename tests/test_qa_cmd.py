@@ -53,9 +53,6 @@ class TestWiring:
         # breaks command parsing at runtime.
         assert qaCmd.keys.name == "qa_qa"
 
-    def test_holds_on_to_the_actor_config(self, qaCmd, actorConfig):
-        assert qaCmd.config == actorConfig
-
     def test_resolves_the_qa_controller_from_the_actor(self, qaCmd, controller):
         assert qaCmd._get_controller() is controller
 
