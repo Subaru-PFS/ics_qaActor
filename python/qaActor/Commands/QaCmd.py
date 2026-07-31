@@ -33,7 +33,7 @@ class QaCmd:
         controller = self._get_controller()
 
         # Show the visit being worked on, then the number of items still queued.
-        visit_id = controller.current_visit()
+        visit_id = controller.current_visit
         if visit_id is None:
             cmd.inform('text="QA currently processing: idle"')
         else:

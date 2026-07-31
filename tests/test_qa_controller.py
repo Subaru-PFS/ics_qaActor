@@ -100,7 +100,7 @@ class TestInit:
         assert controller.queue_size() == 0
 
     def test_starts_with_no_visit_in_flight(self, controller):
-        assert controller.current_visit() is None
+        assert controller.current_visit is None
 
     def test_sets_the_requested_log_level(self, actor, drpQaDir):
         qa(actor, "qa", logLevel=logging.WARNING)
@@ -300,7 +300,7 @@ class TestRunLoop:
 
     def test_tracks_the_visit_while_it_is_being_processed(self, controller):
         seen = []
-        controller.run_pipetask = lambda visitId: seen.append(controller.current_visit())
+        controller.run_pipetask = lambda visitId: seen.append(controller.current_visit)
 
         controller.enqueue_visit(4242)
         controller.stop()
@@ -317,7 +317,7 @@ class TestRunLoop:
 
         controller.run()
 
-        assert controller.current_visit() is None
+        assert controller.current_visit is None
 
     def test_clears_the_current_visit_when_the_visit_fails(self, controller, caplog):
         def boom(visitId):
@@ -331,7 +331,7 @@ class TestRunLoop:
         with caplog.at_level(logging.INFO):
             controller.run()
 
-        assert controller.current_visit() is None, "a failed visit must not stay in flight"
+        assert controller.current_visit is None, "a failed visit must not stay in flight"
 
     def test_the_sentinel_is_never_reported_as_the_current_visit(self, controller):
         controller.run_pipetask = lambda visitId: None
@@ -339,7 +339,7 @@ class TestRunLoop:
 
         controller.run()
 
-        assert controller.current_visit() is None
+        assert controller.current_visit is None
 
     def test_leaves_nothing_behind_in_the_queue(self, controller):
         controller.run_pipetask = lambda visitId: None

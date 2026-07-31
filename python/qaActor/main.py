@@ -21,15 +21,16 @@ class QaActor(ICC):
         # Attaching the controller starts its processing loop.
         self.attachAllControllers()
 
+        # Attach a model of an external actor so we can listen to its properties.
         _models = ("drp",)
         self.drp = Drp(
             actor=self, processing_queue=self.controllers["qa"].processing_queue, logger=self.logger
         )
         self.addModels(_models)
 
-        # Add a listener for when reduceExposure task is complete.
+        # Add a listener on the Drp model for when reduceExposure task is complete.
         self.models["drp"].keyVarDict["reduceExposureStatus"].addCallback(
-            self.drp.receiveStatusKeys, callNow=False
+            self.drp.check_reduced_exposure_status, callNow=False
         )
 
     @override

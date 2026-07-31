@@ -106,7 +106,7 @@ class TestConnectionMade:
         qaActor.connectionMade()
 
         assert qaActor.keyVar.callbacks == [
-            {"callback": qaActor.drp.receiveStatusKeys, "callNow": False}
+            {"callback": qaActor.drp.check_reduced_exposure_status, "callNow": False}
         ]
 
     def test_a_key_delivered_to_the_callback_reaches_the_controller_queue(self, qaActor, controller):

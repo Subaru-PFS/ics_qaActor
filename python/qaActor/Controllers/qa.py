@@ -37,6 +37,11 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
 
         self._current_visit = None
 
+    @property
+    def current_visit(self):
+        """The visit being processed right now, or None if the loop is idle."""
+        return self._current_visit
+
     def start(self, cmd=None):
         """Start the QA processing loop."""
         self.logger.info("Starting QA processing loop")
@@ -103,7 +108,21 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         # fmt: on
 
     def run_pipetask(self, visit_id):
-        """Run the QA pipeline for a single visit, relaying pipetask output to the log."""
+        """Run the QA pipeline for a single visit, relaying pipetask output to the log.
+
+        Parameters
+        ----------
+        visit_id : int
+            The visit identifier to process through the QA pipeline.
+
+        Notes
+        -----
+        - Constructs the pipetask command using `pipetask_cmd()`
+        - Redirects stderr to stdout to ensure all pipeline output is captured
+        - Streams pipeline output in real-time to the logger at the INFO level
+        - Logs warnings if the pipeline fails (non-zero return code)
+        - Logs a success message when the pipeline completes successfully
+        """
         cmd = self.pipetask_cmd(visit_id)
         self.logger.info(f"Running: {' '.join(cmd)}")
 
@@ -124,13 +143,15 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             self.logger.info(f"QA complete for {visit_id=}")
 
     def enqueue_visit(self, visit_id):
-        """Enqueue a visit for QA processing (called by the Drp model)."""
+        """Enqueue a visit for QA processing (called by the Drp model).
+
+        Parameters
+        ----------
+        visit_id : int
+            The visit identifier to add to the QA processing queue.
+        """
         self.processing_queue.put(visit_id)
 
     def queue_size(self):
         """Return the current number of visits waiting in the queue."""
         return self.processing_queue.qsize()
-
-    def current_visit(self):
-        """Return the visit being processed right now, or None if the loop is idle."""
-        return self._current_visit
