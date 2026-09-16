@@ -103,8 +103,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             "-i", self.input_collections,
             "-o", self.output_collection,
             "-p", self.pipeline_path,
-            "-d", f"visit = {visit_id}",
-            "--rebase"
+            "-d", f"visit = {visit_id}"
         ]
         # fmt: on
 
