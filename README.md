@@ -64,7 +64,8 @@ A `pipetask` run that outlives `timeout` is killed and logged as a timeout. The 
 consumer is a single thread, so without this one stuck visit would block every
 visit behind it for the rest of the night.
 
-The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipeline package.
+The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipeline package. The QA
+controller refuses to start if it is unset, rather than letting every visit fail inside `pipetask`.
 
 ## MHS Interface
 

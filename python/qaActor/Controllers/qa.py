@@ -1,8 +1,12 @@
 import logging
 import os
 import queue
+import re
 import subprocess
 import threading
+
+#: A `$VAR` or `${VAR}` that `os.path.expandvars` left behind, meaning it was unset.
+UNEXPANDED_VAR = re.compile(r"\$\{?\w+")
 
 #: Seconds a single `pipetask` run may take before it is killed. Overridable as
 #: `engine.timeout` in qa.yaml; set it to 0 or null there to disable the watchdog.
@@ -41,6 +45,18 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         self.output_collection = cfg["butler"]["output"]
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
         self.num_procs = cfg.get("num_procs", 8)
+
+        # expandvars leaves an unset variable in place rather than raising, so an
+        # unset DRP_QA_DIR would otherwise surface only as the same pipetask
+        # failure on every visit, for as long as the actor runs. Fail here
+        # instead: connectionMade turns a controller that will not build into a
+        # loud startup failure.
+        unexpanded = UNEXPANDED_VAR.search(self.pipeline_path)
+        if unexpanded:
+            raise RuntimeError(
+                f"pipeline path {cfg['pipeline']!r} still contains {unexpanded.group()!r} "
+                f"after expansion — is DRP_QA_DIR set in the actor's environment?"
+            )
         self.timeout = cfg.get("timeout", DEFAULT_TIMEOUT)
 
         self.processing_queue = queue.Queue()

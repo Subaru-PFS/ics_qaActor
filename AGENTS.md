@@ -235,7 +235,10 @@ Naming here is deliberately inconsistent with PEP 8 in places, because MHS requi
 All runtime config comes from `pfs_instdata/config/actors/qa.yaml` via `actor.actorConfig`. **Do not
 hardcode paths, collection names, or process counts** — read them from config, as
 `Controllers/qa.py:__init__` does. `cfg["pipeline"]` is passed through `os.path.expandvars`, so
-`$DRP_QA_DIR` resolves at runtime; keep that indirection.
+`$DRP_QA_DIR` resolves at runtime; keep that indirection. The controller then refuses to build if a
+`$VAR` survived expansion — `expandvars` leaves an unset variable in place rather than raising, and
+without the check an unset `DRP_QA_DIR` produces the same `pipetask` failure on every visit for as
+long as the actor runs.
 
 `engine.timeout` bounds a single `pipetask` run (default `DEFAULT_TIMEOUT`, 600s; `0` disables it).
 It is enforced by a watchdog that kills the child rather than by a deadline on `wait()`: the output
