@@ -14,7 +14,7 @@ import pytest
 from actorcore.ICC import ICC
 from RO import AddCallback
 
-from qaActor import main as main_module
+import qaActor.main as mainModule
 from qaActor.main import QaActor, main
 from qaActor.models.drp import Drp
 
@@ -46,7 +46,7 @@ class FakeKeyVar(AddCallback.BaseMixin):
 
 @pytest.fixture
 def qaActor(monkeypatch, controller, logger):
-    """Build a QaActor with ICC.__init__ bypassed and the ICC surface faked out."""
+    """A QaActor with ICC.__init__ bypassed and the ICC surface faked out."""
     monkeypatch.setattr(ICC, "__init__", lambda self, name, **kwargs: None)
 
     actor = QaActor("qa", productName="qaActor")
@@ -58,7 +58,8 @@ def qaActor(monkeypatch, controller, logger):
     actor.attached = []
     actor.addedModels = []
 
-    actor.keyVar = FakeKeyVar()
+    keyVar = FakeKeyVar()
+    actor.keyVar = keyVar
 
     def fakeAttachAllControllers(path=None):
         actor.attached.append(path)
@@ -68,7 +69,7 @@ def qaActor(monkeypatch, controller, logger):
     def fakeAddModels(names):
         actor.addedModels.append(names)
         for name in names:
-            actor.models[name] = FakeModel({"reduceExposureStatus": actor.keyVar})
+            actor.models[name] = FakeModel({"reduceExposureStatus": keyVar})
 
     actor.attachAllControllers = fakeAttachAllControllers
     actor.addModels = fakeAddModels
@@ -113,7 +114,7 @@ class TestConnectionMade:
 
     def test_subscribes_to_the_drp_model(self, qaActor):
         qaActor.connectionMade()
-        assert qaActor.addedModels == [("drp",)]
+        assert qaActor.addedModels == [("drp2",)]
 
     def test_registers_the_status_callback_without_firing_it(self, qaActor):
         qaActor.connectionMade()
@@ -245,7 +246,7 @@ class TestMain:
             def run(self):
                 built["ran"] = True
 
-        monkeypatch.setattr(main_module, "QaActor", FakeQaActor)
+        monkeypatch.setattr(mainModule, "QaActor", FakeQaActor)
         main()
 
         assert built == {"name": "qa", "kwargs": {"productName": "qaActor"}, "ran": True}

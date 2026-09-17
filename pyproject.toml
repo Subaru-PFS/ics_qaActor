@@ -113,8 +113,19 @@ ignore = [
 convention = "numpy"
 
 [tool.ruff.lint.per-file-ignores]
-# Relax strict rules and docstring requirements inside your unit tests
-"tests/**/*.py" = ["D101", "D102", "D103", "S101"]
+# Relax strict rules and docstring requirements inside your unit tests.
+# The N8xx exemptions are deliberate, not a backlog: the suite's fixtures, helpers
+# and locals are camelCase to match the actorcore/opscore API they stand in for
+# (`actorConfig`, `keyVar`, `visitId`). See "Conventions" in AGENTS.md.
+"tests/**/*.py" = [
+    "D101",
+    "D102",
+    "D103",
+    "D401", # docstring imperative mood
+    "N806", # camelCase locals
+    "N812", # camelCase import aliases
+    "S101",
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["pfs", "ics", "qaActor"]

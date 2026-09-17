@@ -97,20 +97,20 @@ class FakeKey:
 # ------------------------------------------------------------------------------
 @pytest.fixture
 def logger(request):
-    """Return a logger scoped to one test, restored afterwards.
+    """A logger scoped to one test, restored afterwards.
 
     The controller levels a child of this logger in `__init__`, so each test
     gets its own to keep that from leaking.
     """
     log = logging.getLogger(f"qaActor.test.{request.node.name}")
-    previous_level = log.level
+    previousLevel = log.level
     yield log
-    log.setLevel(previous_level)
+    log.setLevel(previousLevel)
 
 
 @pytest.fixture
 def actorConfig():
-    """Return a config with the shape documented in the README / qa.yaml."""
+    """A config with the shape documented in the README / qa.yaml."""
     return {
         "engine": {
             "butler": {
@@ -138,7 +138,7 @@ def actor(actorConfig, logger):
 
 @pytest.fixture
 def controller(actor, drpQaDir):
-    """Yield a `qa` controller, guaranteed not to leak a running thread.
+    """A `qa` controller, guaranteed not to leak a running thread.
 
     Several tests call the real `start`, so the teardown stops and joins the
     thread rather than relying on it being a daemon.

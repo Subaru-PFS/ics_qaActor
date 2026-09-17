@@ -36,7 +36,9 @@ class QaActor(ICC):
             raise RuntimeError("QA controller failed to attach")
 
         # Attach a model of an external actor so we can listen to its properties.
-        _models = ("drp",)
+        # `drp2` is a numbered drpActor instance; opscore strips the trailing
+        # digits, so the keys still come from actorkeys/drp.py.
+        _models = ("drp2",)
         self.addModels(_models)
 
         # Reuse the model across reconnects. `addCallback` skips a callback it
@@ -48,7 +50,7 @@ class QaActor(ICC):
             self.drp = Drp(actor=self, logger=self.logger)
 
         # Add a listener on the Drp model for when reduceExposure task is complete.
-        self.models["drp"].keyVarDict["reduceExposureStatus"].addCallback(
+        self.models["drp2"].keyVarDict["reduceExposureStatus"].addCallback(
             self.drp.check_reduced_exposure_status, callNow=False
         )
 

@@ -6,14 +6,14 @@ The `ics_qaActor` is a component of the Instrument Control System (ICS) for the 
 Its primary role is to monitor the progress of data reduction and provide quality assurance (QA) feedback after each
 exposure is reduced by the `drpActor`.
 
-The actor subscribes to the MHS (Messaging Hub System) and listens for `reduceExposureStatus` keys published by
-`drpActor`. When a new reduction is complete, the visit ID is placed on an internal queue and processed by a background
-worker thread that runs the `pipetask`-based QA pipeline.
+The actor subscribes to the MHS (Messaging Hub System) and listens for `reduceExposureStatus` keys published by the
+`drp2` actor instance. When a new reduction is complete, the visit ID is placed on an internal queue and processed by a
+background worker thread that runs the `pipetask`-based QA pipeline.
 
 ## Architecture
 
 ```
-drpActor  --[reduceExposureStatus]--> qaActor (Drp model callback)
+drp2      --[reduceExposureStatus]--> qaActor (Drp model callback)
                                           |
                                      queue.Queue
                                           |
@@ -70,9 +70,12 @@ The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipel
 
 ### Keys consumed
 
-| Actor | Key                    | Description                                                 |
-|-------|------------------------|-------------------------------------------------------------|
-| `drp` | `reduceExposureStatus` | Signals that a visit has been reduced; carries the visit ID |
+| Actor  | Key                    | Description                                                 |
+|--------|------------------------|-------------------------------------------------------------|
+| `drp2` | `reduceExposureStatus` | Signals that a visit has been reduced; carries the visit ID |
+
+`drp2` is a numbered `drpActor` instance. `opscore` strips the trailing digits when resolving the keys dictionary, so
+the key definitions come from `actorkeys/drp.py` even though the model is registered as `drp2`.
 
 ### Commands accepted
 

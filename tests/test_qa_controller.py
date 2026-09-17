@@ -185,12 +185,12 @@ class TestPipetaskCmd:
         ]
 
     def test_num_procs_is_stringified_for_the_j_flag(self, controller):
-        cmd_line = controller.pipetask_cmd(1)
-        assert cmd_line[cmd_line.index("-j") + 1] == "4"
+        cmdLine = controller.pipetask_cmd(1)
+        assert cmdLine[cmdLine.index("-j") + 1] == "4"
 
     def test_visit_is_passed_as_a_data_query(self, controller):
-        cmd_line = controller.pipetask_cmd(98765)
-        assert cmd_line[cmd_line.index("-d") + 1] == "visit = 98765"
+        cmdLine = controller.pipetask_cmd(98765)
+        assert cmdLine[cmdLine.index("-d") + 1] == "visit = 98765"
 
     def test_every_argument_is_a_string(self, controller):
         # Popen with a non-str element raises, so this would be a runtime failure.
@@ -290,9 +290,9 @@ class TestPipetaskResourceHandling:
         monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
 
         opened = []
-        real_popen = subprocess.Popen
+        realPopen = subprocess.Popen
         monkeypatch.setattr(
-            subprocess, "Popen", lambda *a, **kw: opened.append(real_popen(*a, **kw)) or opened[-1]
+            subprocess, "Popen", lambda *a, **kw: opened.append(realPopen(*a, **kw)) or opened[-1]
         )
 
         controller.run_pipetask(42)
@@ -345,9 +345,9 @@ class TestPipetaskTimeout:
         controller.timeout = 30
 
         timers = []
-        real_timer = threading.Timer
+        realTimer = threading.Timer
         monkeypatch.setattr(
-            threading, "Timer", lambda *a, **kw: timers.append(real_timer(*a, **kw)) or timers[-1]
+            threading, "Timer", lambda *a, **kw: timers.append(realTimer(*a, **kw)) or timers[-1]
         )
 
         with caplog.at_level(logging.INFO):
@@ -364,9 +364,9 @@ class TestPipetaskTimeout:
         fakePopen()
 
         timers = []
-        real_timer = threading.Timer
+        realTimer = threading.Timer
         monkeypatch.setattr(
-            threading, "Timer", lambda *a, **kw: timers.append(real_timer(*a, **kw)) or timers[-1]
+            threading, "Timer", lambda *a, **kw: timers.append(realTimer(*a, **kw)) or timers[-1]
         )
 
         controller.run_pipetask(42)
@@ -430,8 +430,8 @@ class TestQueueApi:
         assert controller.queue_size() == 2
 
     def test_visits_are_processed_first_in_first_out(self, controller):
-        for visit_id in (1, 2, 3):
-            controller.enqueue_visit(visit_id)
+        for visitId in (1, 2, 3):
+            controller.enqueue_visit(visitId)
         drained = [controller.processing_queue.get_nowait() for _ in range(3)]
         assert drained == [1, 2, 3]
 
@@ -580,11 +580,11 @@ class TestLifecycle:
     def test_start_then_enqueue_then_stop_round_trip(self, controller, cmd):
         """The whole lifecycle on a real thread, as the actor drives it."""
         processed = []
-        first_visit_done = threading.Event()
+        firstVisitDone = threading.Event()
 
-        def record(visit_id):
-            processed.append(visit_id)
-            first_visit_done.set()
+        def record(visitId):
+            processed.append(visitId)
+            firstVisitDone.set()
 
         controller.run_pipetask = record
 
@@ -592,7 +592,7 @@ class TestLifecycle:
         assert controller.is_alive()
 
         controller.enqueue_visit(4242)
-        assert first_visit_done.wait(timeout=5), "visit was never picked up off the queue"
+        assert firstVisitDone.wait(timeout=5), "visit was never picked up off the queue"
 
         controller.stop(cmd=cmd)
         controller.join(timeout=5)

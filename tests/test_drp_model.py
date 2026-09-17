@@ -6,7 +6,6 @@ into a visit on the QA queue. The keyvar payloads are built from the real
 """
 
 import logging
-import queue as queue_module
 import types as pytypes
 
 import opscore.protocols.types as types
@@ -63,7 +62,9 @@ class TestQueueResolution:
         model = Drp(actor=actor, logger=logger)
 
         # What a reconnect does: a new controller, and with it a new queue.
-        replacement = queue_module.Queue()
+        import queue as queueModule
+
+        replacement = queueModule.Queue()
         attachController(actor, replacement)
 
         model.check_reduced_exposure_status(FakeKey(valueList=[intValue(12345)]))
@@ -90,8 +91,8 @@ class TestReceiveStatusKeys:
 
     def test_the_enqueued_visit_is_a_plain_int(self, drp, processingQueue):
         drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(12345)]))
-        visit_id = processingQueue.get_nowait()
-        assert type(visit_id) is int
+        visitId = processingQueue.get_nowait()
+        assert type(visitId) is int
 
     def test_only_the_first_value_is_used_as_the_visit(self, drp, processingQueue):
         drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(111), intValue(222)]))
@@ -135,8 +136,8 @@ class TestReceiveStatusKeys:
         assert "Adding 12345 to QA processing queue" in caplog.text
 
     def test_successive_keys_queue_up_in_order(self, drp, processingQueue):
-        for visit_id in (1, 2, 3):
-            drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(visit_id)]))
+        for visitId in (1, 2, 3):
+            drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(visitId)]))
 
         assert [processingQueue.get_nowait() for _ in range(3)] == [1, 2, 3]
 
