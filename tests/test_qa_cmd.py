@@ -203,6 +203,19 @@ class TestProcessVisit:
         qaCmd.process_visit(KeywordCmd(visit_id=types.Int()("98765")))
         assert controller.processing_queue.get_nowait() == 98765
 
+    def test_the_enqueued_visit_is_a_plain_int(self, qaCmd, controller):
+        # Whichever way a visit arrives, the queue holds the same type: `Drp`
+        # already casts, and an opscore Int would otherwise leak from this path
+        # into `current_visit` and the logs.
+        qaCmd.process_visit(KeywordCmd(visit_id=types.Int()("98765")))
+        assert type(controller.processing_queue.get_nowait()) is int
+
+    def test_a_plain_int_visit_id_is_unaffected(self, qaCmd, controller):
+        qaCmd.process_visit(KeywordCmd(visit_id=12345))
+        visitId = controller.processing_queue.get_nowait()
+        assert visitId == 12345
+        assert type(visitId) is int
+
     def test_logs_the_manual_enqueue(self, qaCmd, caplog):
         import logging
 

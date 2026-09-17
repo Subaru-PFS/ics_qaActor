@@ -36,29 +36,38 @@ drp2      --[reduceExposureStatus]--> qaActor (Drp model callback)
 | Dependency      | Notes                                                        |
 |-----------------|--------------------------------------------------------------|
 | `ics_actorkeys` | EUPS package — MHS key definitions                           |
+| `tron_actorcore`| EUPS package — `actorcore`/`opscore`; set up transitively by `ics_actorkeys` |
 | `pfs_instdata`  | EUPS package — instrument data                               |
 | `pfs_utils`     | EUPS package — PFS utilities                                 |
 | `DRP_QA_DIR`    | Environment variable pointing to the DRP QA pipeline package |
 
 ## Configuration
 
-All runtime configuration is read from `pfs_instdata/config/actors/qa.yaml` via `actor.actorConfig`. No values are
-hardcoded in the source.
+Deployment-specific settings — repository paths, collections, the pipeline — are read from
+`pfs_instdata/config/actors/qa.yaml` via `actor.actorConfig`, never hardcoded. This is what the file ships today:
 
 ```yaml
 engine:
   butler:
     datastore: /work/datastore          # Butler repository root
     input: # Butler input collections
-      - "PFS/calib/..."
       - "drpActor/reductions"
       - "PFS/defaults"
     output: qaActor/reductions          # Butler output collection
   pipeline: "$DRP_QA_DIR/pipelines/drpQA.yaml"  # resolved at runtime
+```
+
+Two further keys are optional and fall back to defaults in `Controllers/qa.py` when the file omits them, as it
+currently does. Set them explicitly if this deployment wants something other than the default:
+
+```yaml
   num_procs: 8                          # pipetask -j; defaults to 8
   timeout: 600                          # seconds before a hung pipetask is killed;
                                         # defaults to 600 (10 min), set to 0 to disable
 ```
+
+Not everything is configurable: the `pipetask` logging flags (`--long-log`, `--log-level .=INFO`) are fixed in
+`pipetask_cmd()`.
 
 A `pipetask` run that outlives `timeout` is killed and logged as a timeout. The QA
 consumer is a single thread, so without this one stuck visit would block every

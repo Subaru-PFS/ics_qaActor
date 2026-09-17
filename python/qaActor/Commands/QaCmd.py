@@ -60,8 +60,14 @@ class QaCmd:
         cmd.finish()
 
     def process_visit(self, cmd):
-        """Manually enqueue a visit_id for QA processing."""
-        visit_id = cmd.cmd.keywords["visit_id"].values[0]
+        """Manually enqueue a visit_id for QA processing.
+
+        The value is cast to a plain int so the queue holds one type whichever
+        way a visit arrives. `Drp` already casts; opscore hands this path an
+        `Int`, which subclasses int and so works untouched, but leaks an opscore
+        type into `current_visit` and into the logs.
+        """
+        visit_id = int(cmd.cmd.keywords["visit_id"].values[0])
         self.actor.logger.info(f"Manually enqueuing {visit_id=} for QA processing")
         self._get_controller().enqueue_visit(visit_id)
         cmd.inform(f'text="Enqueued {visit_id=} for QA processing"')
