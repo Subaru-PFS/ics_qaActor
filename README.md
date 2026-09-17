@@ -74,6 +74,9 @@ The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipel
 |--------|------------------------|-------------------------------------------------------------|
 | `drp2` | `reduceExposureStatus` | Signals that a visit has been reduced; carries the visit ID |
 
+Visits whose `reduceExposureStatus` reports a non-zero `returnCode` are logged and skipped — a failed
+reduction has nothing worth running QA over.
+
 `drp2` is a numbered `drpActor` instance. `opscore` strips the trailing digits when resolving the keys dictionary, so
 the key definitions come from `actorkeys/drp.py` even though the model is registered as `drp2`.
 

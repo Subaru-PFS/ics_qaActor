@@ -260,6 +260,9 @@ loop blocks reading a silent child, so a `wait()` timeout would never be reached
   undrained pipe would fill and block the child. Don't split them back out.
 - **Exceptions in `run` are caught and logged, never raised.** One bad visit must not kill the
   consumer loop. Preserve that, and keep `self._current_visit` reset in the `finally`.
+- **`reduceExposureStatus` carries `(visit, returnCode, statusStr, timing)`, not a list of visits.**
+  One key describes one visit. `Drp` skips any visit whose `returnCode` is non-zero; drpActor only
+  ever sends `0` today, so that guard is about the day it doesn't.
 - Don't run `pipetask` from an agent session — it needs a real Butler datastore and takes a long
   time. Test the command construction (`pipetask_cmd`) instead, as `tests/test_qa_controller.py`
   does.
