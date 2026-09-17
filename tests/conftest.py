@@ -99,7 +99,7 @@ class FakeKey:
 def logger(request):
     """A logger scoped to one test, restored afterwards.
 
-    The controller mutates the actor's logger level in `__init__`, so each test
+    The controller levels a child of this logger in `__init__`, so each test
     gets its own to keep that from leaking.
     """
     log = logging.getLogger(f"qaActor.test.{request.node.name}")

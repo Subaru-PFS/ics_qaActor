@@ -6,6 +6,7 @@ into a visit on the QA queue. The keyvar payloads are built from the real
 """
 
 import logging
+import types as pytypes
 
 import opscore.protocols.types as types
 import pytest
@@ -20,21 +21,67 @@ def intValue(n):
     return types.Int()(str(n))
 
 
+def attachController(actor, processingQueue):
+    """Register a stand-in QA controller, which is where the model finds the queue."""
+    actor.controllers["qa"] = pytypes.SimpleNamespace(processing_queue=processingQueue)
+    return actor.controllers["qa"]
+
+
 @pytest.fixture
 def drp(actor, processingQueue, logger):
-    return Drp(actor=actor, processing_queue=processingQueue, logger=logger)
+    attachController(actor, processingQueue)
+    return Drp(actor=actor, logger=logger)
 
 
 class TestConstruction:
     def test_takes_its_collaborators_by_keyword(self, actor, processingQueue, logger):
-        model = Drp(actor=actor, processing_queue=processingQueue, logger=logger)
+        attachController(actor, processingQueue)
+        model = Drp(actor=actor, logger=logger)
         assert model.actor is actor
-        assert model.queue is processingQueue
         assert model.logger is logger
 
-    def test_rejects_positional_arguments(self, actor, processingQueue, logger):
+    def test_rejects_positional_arguments(self, actor, logger):
         with pytest.raises(TypeError):
-            Drp(actor, processingQueue, logger)
+            Drp(actor, logger)
+
+
+class TestQueueResolution:
+    """The queue is looked up per access, not captured at construction.
+
+    `connectionMade` runs again on every hub reconnect and `attachController`
+    builds a fresh controller with a fresh queue each time, so a captured queue
+    would be orphaned and every visit put on it silently dropped.
+    """
+
+    def test_resolves_the_queue_from_the_attached_controller(self, actor, processingQueue, logger):
+        attachController(actor, processingQueue)
+        assert Drp(actor=actor, logger=logger).queue is processingQueue
+
+    def test_follows_the_controller_when_it_is_replaced(self, actor, processingQueue, logger):
+        attachController(actor, processingQueue)
+        model = Drp(actor=actor, logger=logger)
+
+        # What a reconnect does: a new controller, and with it a new queue.
+        import queue as queueModule
+
+        replacement = queueModule.Queue()
+        attachController(actor, replacement)
+
+        model.check_reduced_exposure_status(FakeKey(valueList=[intValue(12345)]))
+
+        assert replacement.get_nowait() == 12345
+        assert processingQueue.empty(), "the orphaned queue must not be fed"
+
+    def test_a_missing_controller_warns_instead_of_raising(self, actor, logger, caplog):
+        model = Drp(actor=actor, logger=logger)
+
+        # opscore swallows exceptions raised out of keyvar callbacks, so raising
+        # here would drop the visit with nothing but a traceback in the log.
+        with caplog.at_level(logging.INFO):
+            model.check_reduced_exposure_status(FakeKey(valueList=[intValue(12345)]))
+
+        assert "QA controller is not attached, dropping 12345" in caplog.text
+        assert [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
 class TestReceiveStatusKeys:

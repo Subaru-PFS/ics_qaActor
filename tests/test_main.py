@@ -12,6 +12,7 @@ import logging
 
 import pytest
 from actorcore.ICC import ICC
+from RO import AddCallback
 
 import qaActor.main as mainModule
 from qaActor.main import QaActor, main
@@ -20,14 +21,27 @@ from qaActor.models.drp import Drp
 from .conftest import FakeCmd, FakeModel
 
 
-class FakeKeyVar:
-    """A keyvar that records the callbacks registered against it."""
+class FakeKeyVar(AddCallback.BaseMixin):
+    """A keyvar that records the callbacks registered against it.
+
+    Built on the real `RO.AddCallback` mixin that opscore keyvars inherit, so
+    the dedupe `connectionMade` leans on — `if callFunc not in self._callbacks`,
+    which compares bound methods by identity — is the genuine implementation
+    rather than a restatement of it that could drift.
+    """
 
     def __init__(self):
-        self.callbacks = []
+        AddCallback.BaseMixin.__init__(self)
+        self._callNow = {}
 
     def addCallback(self, callback, callNow=True):
-        self.callbacks.append({"callback": callback, "callNow": callNow})
+        self._callNow.setdefault(callback, callNow)
+        AddCallback.BaseMixin.addCallback(self, callback, callNow=callNow)
+
+    @property
+    def callbacks(self):
+        """The registered callbacks, after the mixin's own deduping."""
+        return [{"callback": f, "callNow": self._callNow[f]} for f in self._callbacks]
 
 
 @pytest.fixture
@@ -128,6 +142,86 @@ class TestConnectionMade:
             qaActor.connectionMade()
 
         assert "starting QA controller" in caplog.text
+
+
+class TestReconnect:
+    """`connectionMade` runs again on every hub reconnect, so it must be repeatable.
+
+    Twisted drives it through a ReconnectingClientFactory; `attachController`
+    builds a brand new controller, with a brand new queue, each time round.
+    """
+
+    def test_registers_the_callback_only_once_across_reconnects(self, qaActor):
+        qaActor.connectionMade()
+        qaActor.connectionMade()
+        qaActor.connectionMade()
+
+        # addCallback dedupes by identity only, so a fresh Drp per reconnect
+        # would stack up one live callback each time.
+        assert len(qaActor.keyVar.callbacks) == 1
+
+    def test_keeps_the_same_drp_model_across_reconnects(self, qaActor):
+        qaActor.connectionMade()
+        first = qaActor.drp
+
+        qaActor.connectionMade()
+
+        assert qaActor.drp is first
+
+    def test_visits_follow_the_controller_attached_by_the_latest_reconnect(
+        self, qaActor, actorConfig, logger
+    ):
+        import opscore.protocols.types as types
+
+        from qaActor.Controllers.qa import qa
+
+        from .conftest import FakeActor, FakeKey
+
+        qaActor.connectionMade()
+        stale = qaActor.controllers["qa"]
+
+        # Reconnect, and let it swap in a different controller the way the real
+        # attachController does.
+        replacement = qa(FakeActor(actorConfig, logger), "qa")
+        qaActor.attachAllControllers = lambda path=None: qaActor.controllers.__setitem__("qa", replacement)
+        qaActor.connectionMade()
+
+        callback = qaActor.keyVar.callbacks[0]["callback"]
+        callback(FakeKey(valueList=[types.Int()("12345")]))
+
+        assert replacement.queue_size() == 1, "the live controller must receive the visit"
+        assert stale.queue_size() == 0, "the orphaned controller must not be fed"
+
+
+class TestControllerFailedToAttach:
+    """`attachAllControllers` only logs construction failures, so check for it.
+
+    Carrying on regardless leaves an actor that answers `ping` and quietly
+    processes nothing at all.
+    """
+
+    def test_raises_when_the_controller_is_missing(self, qaActor):
+        qaActor.attachAllControllers = lambda path=None: None
+
+        with pytest.raises(RuntimeError, match="QA controller failed to attach"):
+            qaActor.connectionMade()
+
+    def test_warns_the_commanders_when_the_controller_is_missing(self, qaActor):
+        qaActor.attachAllControllers = lambda path=None: None
+
+        with pytest.raises(RuntimeError):
+            qaActor.connectionMade()
+
+        assert qaActor.bcast.warns == ['text="QA controller failed to attach; no visits will be processed"']
+
+    def test_does_not_subscribe_to_anything_when_the_controller_is_missing(self, qaActor):
+        qaActor.attachAllControllers = lambda path=None: None
+
+        with pytest.raises(RuntimeError):
+            qaActor.connectionMade()
+
+        assert qaActor.addedModels == []
+        assert qaActor.drp is None
 
 
 class TestConnectionLost:

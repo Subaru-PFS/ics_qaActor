@@ -10,10 +10,11 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
-from qaActor.Controllers.qa import qa
+from qaActor.Controllers.qa import DEFAULT_TIMEOUT, qa
 
 from .conftest import FakeActor
 
@@ -22,19 +23,42 @@ class FakePopen:
     """A stand-in for `subprocess.Popen` covering only what `run_pipetask` uses.
 
     `returncode` stays None until `wait()` runs, which is what catches the code
-    reading the exit status before the process has actually finished.
+    reading the exit status before the process has actually finished. It is a
+    context manager because the real Popen is used as one, so that the stdout
+    pipe is closed and the child reaped even if the read loop raises.
     """
 
     def __init__(self, lines=(), exitCode=0):
         self.stdout = iter(lines)
         self.returncode = None
         self.waited = False
+        self.killed = False
+        self.closed = False
         self._exitCode = exitCode
 
     def wait(self):
         self.waited = True
-        self.returncode = self._exitCode
-        return self._exitCode
+        if self.returncode is None:
+            self.returncode = self._exitCode
+        return self.returncode
+
+    def poll(self):
+        """None while running, the exit status once finished — as Popen does."""
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+        # A killed child's pipe reaches EOF, which is what unblocks the reader.
+        self.stdout = iter(())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.closed = True
+        self.wait()
+        return False
 
 
 @pytest.fixture
@@ -102,13 +126,33 @@ class TestInit:
     def test_starts_with_no_visit_in_flight(self, controller):
         assert controller.current_visit is None
 
-    def test_sets_the_requested_log_level(self, actor, drpQaDir):
-        qa(actor, "qa", logLevel=logging.WARNING)
-        assert actor.logger.level == logging.WARNING
+    def test_sets_the_requested_log_level_on_its_own_logger(self, actor, drpQaDir):
+        ctrl = qa(actor, "qa", logLevel=logging.WARNING)
+        assert ctrl.logger.level == logging.WARNING
 
     def test_defaults_to_debug_log_level(self, actor, drpQaDir):
-        qa(actor, "qa")
-        assert actor.logger.level == logging.DEBUG
+        ctrl = qa(actor, "qa")
+        assert ctrl.logger.level == logging.DEBUG
+
+    def test_logs_to_a_child_of_the_actor_logger(self, actor, drpQaDir):
+        ctrl = qa(actor, "qa")
+        assert ctrl.logger.name == f"{actor.logger.name}.qa"
+        assert ctrl.logger.parent is actor.logger
+
+    def test_does_not_relevel_the_actors_own_logger(self, actor, drpQaDir):
+        # `actor.logger` is the shared `actor` logger, levelled from
+        # logging.baseLevel in the config. Attaching a controller must not
+        # silently drag the whole actor down to DEBUG.
+        actor.logger.setLevel(logging.INFO)
+        qa(actor, "qa", logLevel=logging.DEBUG)
+        assert actor.logger.level == logging.INFO
+
+    def test_timeout_comes_from_config(self, actorConfig, logger, drpQaDir):
+        actorConfig["engine"]["timeout"] = 120
+        assert qa(FakeActor(actorConfig, logger), "qa").timeout == 120
+
+    def test_timeout_defaults_to_ten_minutes(self, controller):
+        assert controller.timeout == DEFAULT_TIMEOUT == 600
 
     def test_construction_matches_how_ICC_attachController_calls_it(self, actor, drpQaDir):
         # ICC does `controllerClass(self, instanceName)` positionally, then
@@ -173,9 +217,7 @@ class TestRunPipetask:
             "text": True,
         }
 
-    def test_relays_pipetask_output_to_the_log_without_trailing_newlines(
-        self, controller, fakePopen, caplog
-    ):
+    def test_relays_pipetask_output_to_the_log_without_trailing_newlines(self, controller, fakePopen, caplog):
         fakePopen(lines=["first line\n", "second line\n"])
         with caplog.at_level(logging.INFO):
             controller.run_pipetask(42)
@@ -228,6 +270,181 @@ class TestRunPipetask:
 
         assert "hello from the pipeline" in caplog.messages
         assert expected in caplog.text
+
+
+class TestPipetaskResourceHandling:
+    """The child process is context-managed so its pipe is not left to the GC."""
+
+    def test_popen_is_used_as_a_context_manager(self, controller, fakePopen):
+        calls = fakePopen()
+        controller.run_pipetask(42)
+        assert calls[0]["proc"].closed is True
+
+    def test_the_process_is_closed_even_when_the_read_loop_raises(self, controller, fakePopen, monkeypatch):
+        calls = fakePopen(lines=["a line\n"])
+        monkeypatch.setattr(controller.logger, "info", _raiseOn("a line", RuntimeError("logging blew up")))
+
+        with pytest.raises(RuntimeError):
+            controller.run_pipetask(42)
+
+        assert calls[0]["proc"].closed is True, "the stdout pipe must not be leaked on the error path"
+
+    def test_a_real_subprocess_leaves_no_open_pipe(self, controller, monkeypatch):
+        program = "print('done')"
+        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+
+        opened = []
+        realPopen = subprocess.Popen
+        monkeypatch.setattr(
+            subprocess, "Popen", lambda *a, **kw: opened.append(realPopen(*a, **kw)) or opened[-1]
+        )
+
+        controller.run_pipetask(42)
+
+        assert opened[0].stdout.closed, "Popen.__exit__ must close the stdout pipe"
+
+
+class TestPipetaskTimeout:
+    """A hung pipetask would otherwise block the actor's only QA consumer forever."""
+
+    def test_no_watchdog_is_armed_when_the_timeout_is_disabled(self, controller, fakePopen):
+        controller.timeout = 0
+        calls = fakePopen()
+        controller.run_pipetask(42)
+        assert calls[0]["proc"].killed is False
+
+    def test_a_hung_pipeline_is_killed_and_reported(self, controller, monkeypatch, caplog):
+        # Sleeps far longer than the timeout and never writes a line, so the read
+        # loop is blocked: only the watchdog can end this.
+        program = "import time; time.sleep(30)"
+        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        controller.timeout = 0.5
+
+        started = time.monotonic()
+        with caplog.at_level(logging.INFO):
+            controller.run_pipetask(42)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 20, "the watchdog must not wait for the child to finish on its own"
+        assert "QA pipetask timed out for visit_id=42 after 0.5s, killed" in caplog.text
+
+    def test_a_timeout_is_reported_as_a_timeout_not_a_plain_failure(self, controller, monkeypatch, caplog):
+        program = "import time; time.sleep(30)"
+        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        controller.timeout = 0.5
+
+        with caplog.at_level(logging.INFO):
+            controller.run_pipetask(42)
+
+        # A killed child exits with -9; saying only "returncode -9" would send an
+        # operator hunting for a pipeline bug that is not there.
+        assert "QA pipetask failed" not in caplog.text
+        assert "QA complete" not in caplog.text
+
+    def test_the_watchdog_is_cancelled_when_the_pipeline_finishes_in_time(
+        self, controller, monkeypatch, caplog
+    ):
+        program = "print('quick')"
+        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        controller.timeout = 30
+
+        timers = []
+        realTimer = threading.Timer
+        monkeypatch.setattr(
+            threading, "Timer", lambda *a, **kw: timers.append(realTimer(*a, **kw)) or timers[-1]
+        )
+
+        with caplog.at_level(logging.INFO):
+            controller.run_pipetask(42)
+
+        assert "QA complete for visit_id=42" in caplog.text
+        # `cancel` retires the timer by setting its finished event; the thread
+        # itself winds down a moment later, so assert on the event, not is_alive.
+        assert timers[0].finished.is_set(), "an uncancelled watchdog would linger for the full timeout"
+
+    def test_the_watchdog_does_not_block_interpreter_shutdown(self, controller, fakePopen, monkeypatch):
+        # A non-daemon timer would hold the process open for the whole timeout.
+        controller.timeout = 30
+        fakePopen()
+
+        timers = []
+        realTimer = threading.Timer
+        monkeypatch.setattr(
+            threading, "Timer", lambda *a, **kw: timers.append(realTimer(*a, **kw)) or timers[-1]
+        )
+
+        controller.run_pipetask(42)
+
+        assert timers[0].daemon is True
+
+    def test_a_watchdog_firing_on_a_clean_exit_is_not_called_a_timeout(self, controller, fakePopen, caplog):
+        # The watchdog can fire in the moment between the read loop ending and
+        # the timer being cancelled. If the pipeline exited zero it did finish in
+        # time, and saying otherwise would send someone chasing a phantom hang.
+        fakePopen(exitCode=0)
+
+        def fireImmediately(process, visitId, timedOut):
+            timedOut.set()
+            return None
+
+        controller._start_watchdog = fireImmediately
+
+        with caplog.at_level(logging.INFO):
+            controller.run_pipetask(42)
+
+        assert "QA complete for visit_id=42" in caplog.text
+        assert "timed out" not in caplog.text
+
+    def test_a_watchdog_that_fires_after_the_pipeline_exits_stays_quiet(
+        self, controller, fakePopen, monkeypatch, caplog
+    ):
+        """The timer can fire between the pipeline exiting and `cancel` retiring it.
+
+        Firing then must not log a timeout for a run that actually finished, and
+        must not signal a reaped child.
+        """
+        calls = fakePopen(exitCode=0)
+        controller.timeout = 30
+
+        fired = []
+        realTimer = threading.Timer
+        monkeypatch.setattr(
+            threading, "Timer", lambda interval, fn: fired.append(fn) or realTimer(interval, fn)
+        )
+
+        controller.run_pipetask(42)
+        proc = calls[0]["proc"]
+        assert proc.returncode == 0, "the pipeline finished before the timer fires below"
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            fired[0]()
+
+        assert proc.killed is False, "a finished child must not be signalled"
+        assert caplog.text == "", "a finished run must not be reported as a timeout"
+
+    def test_a_timed_out_visit_does_not_stop_the_loop(self, controller, monkeypatch, caplog):
+        program = "import time; time.sleep(30)"
+        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        controller.timeout = 0.5
+
+        controller.enqueue_visit(1)
+        controller.stop()
+
+        with caplog.at_level(logging.INFO):
+            controller.run()
+
+        assert "Received the stop sentinel" in caplog.text
+
+
+def _raiseOn(needle, error):
+    """Build a logger.info stand-in that raises the first time it sees `needle`."""
+
+    def info(msg, *args, **kwargs):
+        if needle in str(msg):
+            raise error
+
+    return info
 
 
 # ------------------------------------------------------------------------------

@@ -55,7 +55,14 @@ engine:
       - "PFS/defaults"
     output: qaActor/reductions          # Butler output collection
   pipeline: "$DRP_QA_DIR/pipelines/drpQA.yaml"  # resolved at runtime
+  num_procs: 8                          # pipetask -j; defaults to 8
+  timeout: 600                          # seconds before a hung pipetask is killed;
+                                        # defaults to 600 (10 min), set to 0 to disable
 ```
+
+A `pipetask` run that outlives `timeout` is killed and logged as a timeout. The QA
+consumer is a single thread, so without this one stuck visit would block every
+visit behind it for the rest of the night.
 
 The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipeline package.
 
@@ -80,6 +87,9 @@ the key definitions come from `actorkeys/drp.py` even though the model is regist
 | `process <visit_id>` | Manually enqueues a visit ID for QA processing (bypasses the automatic `reduceExposureStatus` listener) |
 
 The processing loop runs whenever the actor is running; stop or restart the actor itself rather than the loop.
+
+`stop` is cooperative by design: a visit already in `pipetask` runs to completion
+rather than being killed mid-pipeline. Only the `timeout` watchdog kills a run.
 
 ## License
 

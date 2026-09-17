@@ -2,6 +2,7 @@
 
 import opscore.protocols.keys as keys
 import opscore.protocols.types as types
+from opscore.utility.qstr import qstr
 
 
 class QaCmd:
@@ -42,14 +43,20 @@ class QaCmd:
         cmd.finish()
 
     def show(self, cmd):
-        """Show status keywords from all models."""
+        """Show status keywords from all models.
+
+        Values go out through `qstr`: a keyvar repr embeds the values' own reprs,
+        and Python switches a string's repr to double quotes as soon as it holds
+        an apostrophe — `String("can't open file")`. Interpolated raw, that inner
+        quote closes the `text="..."` value early and corrupts the MHS line.
+        """
         for n in self.actor.models:
             try:
                 d = self.actor.models[n].keyVarDict
                 for _k, v in d.items():
-                    cmd.inform(f'text="{v!r}"')
+                    cmd.inform(f"text={qstr(repr(v))}")
             except Exception as e:
-                cmd.warn(f'text="QaCmd.show: {n}: {e}"')
+                cmd.warn(f"text={qstr(f'QaCmd.show: {n}: {e}')}")
         cmd.finish()
 
     def process_visit(self, cmd):
