@@ -14,7 +14,7 @@ import pytest
 from actorcore.ICC import ICC
 from RO import AddCallback
 
-import qaActor.main as mainModule
+from qaActor import main as main_module
 from qaActor.main import QaActor, main
 from qaActor.models.drp import Drp
 
@@ -46,7 +46,7 @@ class FakeKeyVar(AddCallback.BaseMixin):
 
 @pytest.fixture
 def qaActor(monkeypatch, controller, logger):
-    """A QaActor with ICC.__init__ bypassed and the ICC surface faked out."""
+    """Build a QaActor with ICC.__init__ bypassed and the ICC surface faked out."""
     monkeypatch.setattr(ICC, "__init__", lambda self, name, **kwargs: None)
 
     actor = QaActor("qa", productName="qaActor")
@@ -58,8 +58,7 @@ def qaActor(monkeypatch, controller, logger):
     actor.attached = []
     actor.addedModels = []
 
-    keyVar = FakeKeyVar()
-    actor.keyVar = keyVar
+    actor.keyVar = FakeKeyVar()
 
     def fakeAttachAllControllers(path=None):
         actor.attached.append(path)
@@ -69,7 +68,7 @@ def qaActor(monkeypatch, controller, logger):
     def fakeAddModels(names):
         actor.addedModels.append(names)
         for name in names:
-            actor.models[name] = FakeModel({"reduceExposureStatus": keyVar})
+            actor.models[name] = FakeModel({"reduceExposureStatus": actor.keyVar})
 
     actor.attachAllControllers = fakeAttachAllControllers
     actor.addModels = fakeAddModels
@@ -246,7 +245,7 @@ class TestMain:
             def run(self):
                 built["ran"] = True
 
-        monkeypatch.setattr(mainModule, "QaActor", FakeQaActor)
+        monkeypatch.setattr(main_module, "QaActor", FakeQaActor)
         main()
 
         assert built == {"name": "qa", "kwargs": {"productName": "qaActor"}, "ran": True}

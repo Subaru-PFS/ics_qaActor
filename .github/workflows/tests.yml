@@ -11,6 +11,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Just ruff, not the [dev] extra: linting needs none of the git
+      # dependencies, and skipping them turns a couple of minutes of cloning into
+      # a few seconds. Pinned so a ruff release cannot fail an unrelated PR —
+      # bump it deliberately, in step with the `dev` extra in pyproject.toml.
+      - name: Install ruff
+        run: python -m pip install ruff==0.16.8
+
+      - name: Lint
+        run: ruff check --output-format=github
+
+      # Runs even if `ruff check` failed, so one push reports both.
+      - name: Check formatting
+        if: always()
+        run: ruff format --check
+
   pytest:
     name: pytest (python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

@@ -56,8 +56,8 @@ engine:
     output: qaActor/reductions          # Butler output collection
   pipeline: "$DRP_QA_DIR/pipelines/drpQA.yaml"  # resolved at runtime
   num_procs: 8                          # pipetask -j; defaults to 8
-  timeout: 3600                         # seconds before a hung pipetask is killed;
-                                        # defaults to 3600, set to 0 to disable
+  timeout: 600                          # seconds before a hung pipetask is killed;
+                                        # defaults to 600 (10 min), set to 0 to disable
 ```
 
 A `pipetask` run that outlives `timeout` is killed and logged as a timeout. The QA

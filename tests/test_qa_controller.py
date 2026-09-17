@@ -147,8 +147,8 @@ class TestInit:
         actorConfig["engine"]["timeout"] = 120
         assert qa(FakeActor(actorConfig, logger), "qa").timeout == 120
 
-    def test_timeout_defaults_to_an_hour(self, controller):
-        assert controller.timeout == DEFAULT_TIMEOUT == 3600
+    def test_timeout_defaults_to_ten_minutes(self, controller):
+        assert controller.timeout == DEFAULT_TIMEOUT == 600
 
     def test_construction_matches_how_ICC_attachController_calls_it(self, actor, drpQaDir):
         # ICC does `controllerClass(self, instanceName)` positionally, then
@@ -185,12 +185,12 @@ class TestPipetaskCmd:
         ]
 
     def test_num_procs_is_stringified_for_the_j_flag(self, controller):
-        cmdLine = controller.pipetask_cmd(1)
-        assert cmdLine[cmdLine.index("-j") + 1] == "4"
+        cmd_line = controller.pipetask_cmd(1)
+        assert cmd_line[cmd_line.index("-j") + 1] == "4"
 
     def test_visit_is_passed_as_a_data_query(self, controller):
-        cmdLine = controller.pipetask_cmd(98765)
-        assert cmdLine[cmdLine.index("-d") + 1] == "visit = 98765"
+        cmd_line = controller.pipetask_cmd(98765)
+        assert cmd_line[cmd_line.index("-d") + 1] == "visit = 98765"
 
     def test_every_argument_is_a_string(self, controller):
         # Popen with a non-str element raises, so this would be a runtime failure.
@@ -213,9 +213,7 @@ class TestRunPipetask:
             "text": True,
         }
 
-    def test_relays_pipetask_output_to_the_log_without_trailing_newlines(
-        self, controller, fakePopen, caplog
-    ):
+    def test_relays_pipetask_output_to_the_log_without_trailing_newlines(self, controller, fakePopen, caplog):
         fakePopen(lines=["first line\n", "second line\n"])
         with caplog.at_level(logging.INFO):
             controller.run_pipetask(42)
@@ -278,13 +276,9 @@ class TestPipetaskResourceHandling:
         controller.run_pipetask(42)
         assert calls[0]["proc"].closed is True
 
-    def test_the_process_is_closed_even_when_the_read_loop_raises(
-        self, controller, fakePopen, monkeypatch
-    ):
+    def test_the_process_is_closed_even_when_the_read_loop_raises(self, controller, fakePopen, monkeypatch):
         calls = fakePopen(lines=["a line\n"])
-        monkeypatch.setattr(
-            controller.logger, "info", _raiseOn("a line", RuntimeError("logging blew up"))
-        )
+        monkeypatch.setattr(controller.logger, "info", _raiseOn("a line", RuntimeError("logging blew up")))
 
         with pytest.raises(RuntimeError):
             controller.run_pipetask(42)
@@ -296,9 +290,9 @@ class TestPipetaskResourceHandling:
         monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
 
         opened = []
-        realPopen = subprocess.Popen
+        real_popen = subprocess.Popen
         monkeypatch.setattr(
-            subprocess, "Popen", lambda *a, **kw: opened.append(realPopen(*a, **kw)) or opened[-1]
+            subprocess, "Popen", lambda *a, **kw: opened.append(real_popen(*a, **kw)) or opened[-1]
         )
 
         controller.run_pipetask(42)
@@ -330,9 +324,7 @@ class TestPipetaskTimeout:
         assert elapsed < 20, "the watchdog must not wait for the child to finish on its own"
         assert "QA pipetask timed out for visit_id=42 after 0.5s, killed" in caplog.text
 
-    def test_a_timeout_is_reported_as_a_timeout_not_a_plain_failure(
-        self, controller, monkeypatch, caplog
-    ):
+    def test_a_timeout_is_reported_as_a_timeout_not_a_plain_failure(self, controller, monkeypatch, caplog):
         program = "import time; time.sleep(30)"
         monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
         controller.timeout = 0.5
@@ -353,9 +345,9 @@ class TestPipetaskTimeout:
         controller.timeout = 30
 
         timers = []
-        realTimer = threading.Timer
+        real_timer = threading.Timer
         monkeypatch.setattr(
-            threading, "Timer", lambda *a, **kw: timers.append(realTimer(*a, **kw)) or timers[-1]
+            threading, "Timer", lambda *a, **kw: timers.append(real_timer(*a, **kw)) or timers[-1]
         )
 
         with caplog.at_level(logging.INFO):
@@ -366,17 +358,18 @@ class TestPipetaskTimeout:
         # itself winds down a moment later, so assert on the event, not is_alive.
         assert timers[0].finished.is_set(), "an uncancelled watchdog would linger for the full timeout"
 
-    def test_the_watchdog_does_not_block_interpreter_shutdown(self, controller, fakePopen):
+    def test_the_watchdog_does_not_block_interpreter_shutdown(self, controller, fakePopen, monkeypatch):
         # A non-daemon timer would hold the process open for the whole timeout.
         controller.timeout = 30
         fakePopen()
+
         timers = []
-        realTimer = threading.Timer
-        try:
-            threading.Timer = lambda *a, **kw: timers.append(realTimer(*a, **kw)) or timers[-1]
-            controller.run_pipetask(42)
-        finally:
-            threading.Timer = realTimer
+        real_timer = threading.Timer
+        monkeypatch.setattr(
+            threading, "Timer", lambda *a, **kw: timers.append(real_timer(*a, **kw)) or timers[-1]
+        )
+
+        controller.run_pipetask(42)
 
         assert timers[0].daemon is True
 
@@ -437,8 +430,8 @@ class TestQueueApi:
         assert controller.queue_size() == 2
 
     def test_visits_are_processed_first_in_first_out(self, controller):
-        for visitId in (1, 2, 3):
-            controller.enqueue_visit(visitId)
+        for visit_id in (1, 2, 3):
+            controller.enqueue_visit(visit_id)
         drained = [controller.processing_queue.get_nowait() for _ in range(3)]
         assert drained == [1, 2, 3]
 
@@ -587,11 +580,11 @@ class TestLifecycle:
     def test_start_then_enqueue_then_stop_round_trip(self, controller, cmd):
         """The whole lifecycle on a real thread, as the actor drives it."""
         processed = []
-        firstVisitDone = threading.Event()
+        first_visit_done = threading.Event()
 
-        def record(visitId):
-            processed.append(visitId)
-            firstVisitDone.set()
+        def record(visit_id):
+            processed.append(visit_id)
+            first_visit_done.set()
 
         controller.run_pipetask = record
 
@@ -599,7 +592,7 @@ class TestLifecycle:
         assert controller.is_alive()
 
         controller.enqueue_visit(4242)
-        assert firstVisitDone.wait(timeout=5), "visit was never picked up off the queue"
+        assert first_visit_done.wait(timeout=5), "visit was never picked up off the queue"
 
         controller.stop(cmd=cmd)
         controller.join(timeout=5)

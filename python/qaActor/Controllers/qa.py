@@ -6,7 +6,7 @@ import threading
 
 #: Seconds a single `pipetask` run may take before it is killed. Overridable as
 #: `engine.timeout` in qa.yaml; set it to 0 or null there to disable the watchdog.
-DEFAULT_TIMEOUT = 3600
+DEFAULT_TIMEOUT = 600
 
 
 class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController
