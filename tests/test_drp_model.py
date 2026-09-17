@@ -21,6 +21,18 @@ def intValue(n):
     return types.Int()(str(n))
 
 
+def strValue(s):
+    """Build an opscore String, the way a real keyvar carries one."""
+    return types.String()(s)
+
+
+def reduceExposureStatus(visit, returnCode=0, statusStr="OK", timing=1.5):
+    """Build the full four-field payload drpActor publishes."""
+    return FakeKey(
+        valueList=[intValue(visit), intValue(returnCode), strValue(statusStr), types.Float()(str(timing))]
+    )
+
+
 def attachController(actor, processingQueue):
     """Register a stand-in QA controller, which is where the model finds the queue."""
     actor.controllers["qa"] = pytypes.SimpleNamespace(processing_queue=processingQueue)
@@ -95,7 +107,9 @@ class TestReceiveStatusKeys:
         assert type(visitId) is int
 
     def test_only_the_first_value_is_used_as_the_visit(self, drp, processingQueue):
-        drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(111), intValue(222)]))
+        # The trailing fields are returnCode/statusStr/timing, not further
+        # visits: one key describes exactly one visit.
+        drp.check_reduced_exposure_status(reduceExposureStatus(111))
         assert processingQueue.get_nowait() == 111
         assert processingQueue.empty()
 
@@ -140,6 +154,58 @@ class TestReceiveStatusKeys:
             drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(visitId)]))
 
         assert [processingQueue.get_nowait() for _ in range(3)] == [1, 2, 3]
+
+
+class TestReductionReturnCode:
+    """A non-zero returnCode means the reduction failed; QA has nothing to chew on.
+
+    drpActor only ever sends 0 today (`drpActor.utils.engine` line ~443 emits a
+    literal `0`), which is exactly why this is worth pinning — the day it learns
+    to report a failure, the default must not be to run QA over it anyway.
+    """
+
+    def test_a_successful_reduction_is_enqueued(self, drp, processingQueue):
+        drp.check_reduced_exposure_status(reduceExposureStatus(12345, returnCode=0))
+        assert processingQueue.get_nowait() == 12345
+
+    def test_a_failed_reduction_is_skipped(self, drp, processingQueue):
+        drp.check_reduced_exposure_status(reduceExposureStatus(12345, returnCode=1))
+        assert processingQueue.empty()
+
+    def test_a_failed_reduction_is_reported_with_its_status(self, drp, caplog):
+        with caplog.at_level(logging.INFO):
+            drp.check_reduced_exposure_status(
+                reduceExposureStatus(12345, returnCode=2, statusStr="butler exploded")
+            )
+
+        assert "reduceExposure failed for 12345 (returnCode 2: butler exploded), skipping QA" in caplog.text
+        assert [r for r in caplog.records if r.levelno == logging.WARNING]
+
+    @pytest.mark.parametrize("returnCode", [1, 2, -1, 255])
+    def test_every_non_zero_code_is_skipped(self, drp, processingQueue, returnCode):
+        drp.check_reduced_exposure_status(reduceExposureStatus(1, returnCode=returnCode))
+        assert processingQueue.empty()
+
+    def test_a_payload_with_no_return_code_is_still_enqueued(self, drp, processingQueue):
+        # The short payload older drpActor builds send. Refusing it would drop
+        # work that is almost certainly fine.
+        drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(12345)]))
+        assert processingQueue.get_nowait() == 12345
+
+    def test_a_null_return_code_is_treated_as_success(self, drp, processingQueue):
+        drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(12345), None]))
+        assert processingQueue.get_nowait() == 12345
+
+    def test_a_failed_reduction_never_reaches_the_controller_lookup(self, actor, logger, caplog):
+        # No controller attached at all: if the returnCode guard runs first, this
+        # reports the reduction failure rather than a missing controller.
+        model = Drp(actor=actor, logger=logger)
+
+        with caplog.at_level(logging.INFO):
+            model.check_reduced_exposure_status(reduceExposureStatus(12345, returnCode=1))
+
+        assert "skipping QA" in caplog.text
+        assert "not attached" not in caplog.text
 
 
 class TestPayloadFragility:

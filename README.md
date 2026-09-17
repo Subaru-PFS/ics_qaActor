@@ -64,7 +64,8 @@ A `pipetask` run that outlives `timeout` is killed and logged as a timeout. The 
 consumer is a single thread, so without this one stuck visit would block every
 visit behind it for the rest of the night.
 
-The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipeline package.
+The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipeline package. The QA
+controller refuses to start if it is unset, rather than letting every visit fail inside `pipetask`.
 
 ## MHS Interface
 
@@ -73,6 +74,9 @@ The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipel
 | Actor  | Key                    | Description                                                 |
 |--------|------------------------|-------------------------------------------------------------|
 | `drp2` | `reduceExposureStatus` | Signals that a visit has been reduced; carries the visit ID |
+
+Visits whose `reduceExposureStatus` reports a non-zero `returnCode` are logged and skipped — a failed
+reduction has nothing worth running QA over.
 
 `drp2` is a numbered `drpActor` instance. `opscore` strips the trailing digits when resolving the keys dictionary, so
 the key definitions come from `actorkeys/drp.py` even though the model is registered as `drp2`.

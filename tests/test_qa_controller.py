@@ -98,13 +98,35 @@ class TestInit:
     def test_expands_pipeline_path_against_the_environment(self, controller):
         assert controller.pipeline_path == "/opt/drp_qa/pipelines/drpQA.yaml"
 
-    def test_unset_pipeline_env_var_is_left_unexpanded(self, actorConfig, logger, monkeypatch):
-        # Documents a sharp edge: os.path.expandvars leaves an unset variable in
-        # place rather than raising, so a missing DRP_QA_DIR only surfaces later
-        # as a pipetask failure.
+    def test_an_unset_pipeline_env_var_fails_at_construction(self, actorConfig, logger, monkeypatch):
+        # os.path.expandvars leaves an unset variable in place rather than
+        # raising. Left alone that means the same pipetask failure on every
+        # visit for as long as the actor runs, so refuse to build instead.
         monkeypatch.delenv("DRP_QA_DIR", raising=False)
+
+        with pytest.raises(RuntimeError, match=r"DRP_QA_DIR"):
+            qa(FakeActor(actorConfig, logger), "qa")
+
+    def test_the_failure_names_the_variable_that_did_not_expand(self, actorConfig, logger, monkeypatch):
+        monkeypatch.delenv("DRP_QA_DIR", raising=False)
+
+        with pytest.raises(RuntimeError, match=r"\$DRP_QA_DIR"):
+            qa(FakeActor(actorConfig, logger), "qa")
+
+    def test_braced_variables_are_caught_too(self, actorConfig, logger, monkeypatch):
+        actorConfig["engine"]["pipeline"] = "${DRP_QA_DIR}/pipelines/drpQA.yaml"
+        monkeypatch.delenv("DRP_QA_DIR", raising=False)
+
+        with pytest.raises(RuntimeError):
+            qa(FakeActor(actorConfig, logger), "qa")
+
+    def test_a_literal_path_with_no_variables_is_accepted(self, actorConfig, logger, monkeypatch):
+        # Nothing to expand is not the same as failing to expand.
+        actorConfig["engine"]["pipeline"] = "/opt/drp_qa/pipelines/drpQA.yaml"
+        monkeypatch.delenv("DRP_QA_DIR", raising=False)
+
         ctrl = qa(FakeActor(actorConfig, logger), "qa")
-        assert ctrl.pipeline_path == "$DRP_QA_DIR/pipelines/drpQA.yaml"
+        assert ctrl.pipeline_path == "/opt/drp_qa/pipelines/drpQA.yaml"
 
     def test_num_procs_comes_from_config(self, controller):
         assert controller.num_procs == 4

@@ -235,7 +235,10 @@ Naming here is deliberately inconsistent with PEP 8 in places, because MHS requi
 All runtime config comes from `pfs_instdata/config/actors/qa.yaml` via `actor.actorConfig`. **Do not
 hardcode paths, collection names, or process counts** — read them from config, as
 `Controllers/qa.py:__init__` does. `cfg["pipeline"]` is passed through `os.path.expandvars`, so
-`$DRP_QA_DIR` resolves at runtime; keep that indirection.
+`$DRP_QA_DIR` resolves at runtime; keep that indirection. The controller then refuses to build if a
+`$VAR` survived expansion — `expandvars` leaves an unset variable in place rather than raising, and
+without the check an unset `DRP_QA_DIR` produces the same `pipetask` failure on every visit for as
+long as the actor runs.
 
 `engine.timeout` bounds a single `pipetask` run (default `DEFAULT_TIMEOUT`, 600s; `0` disables it).
 It is enforced by a watchdog that kills the child rather than by a deadline on `wait()`: the output
@@ -260,6 +263,9 @@ loop blocks reading a silent child, so a `wait()` timeout would never be reached
   undrained pipe would fill and block the child. Don't split them back out.
 - **Exceptions in `run` are caught and logged, never raised.** One bad visit must not kill the
   consumer loop. Preserve that, and keep `self._current_visit` reset in the `finally`.
+- **`reduceExposureStatus` carries `(visit, returnCode, statusStr, timing)`, not a list of visits.**
+  One key describes one visit. `Drp` skips any visit whose `returnCode` is non-zero; drpActor only
+  ever sends `0` today, so that guard is about the day it doesn't.
 - Don't run `pipetask` from an agent session — it needs a real Butler datastore and takes a long
   time. Test the command construction (`pipetask_cmd`) instead, as `tests/test_qa_controller.py`
   does.
