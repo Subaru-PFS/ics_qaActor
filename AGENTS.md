@@ -197,12 +197,16 @@ Naming here is deliberately inconsistent with PEP 8 in places, because MHS requi
 - `class qa` in `Controllers/qa.py` is lowercase to match the module name —
   `ICC.attachController` looks the class up by module name. It carries an explicit
   `# noqa: N801`. Don't "fix" it.
-- Actor-facing callbacks keep their upstream camelCase (`check_reduced_exposure_status`, `connectionMade`,
-  `keyVarDict`, `actorConfig`). `N802`/`N803` are globally ignored for this reason.
+- **Names imposed by upstream keep their camelCase** — overrides and attributes whose spelling
+  `actorcore`/`opscore` dictates, such as `connectionMade`, `connectionLost`, `keyVarDict` and
+  `actorConfig`. `N802`/`N803` are globally ignored for this reason. The test of whether a name
+  belongs here is whether something outside this repo chose it, not whether MHS calls it.
+- **Names we choose are snake_case, even when MHS calls them.**
+  `Drp.check_reduced_exposure_status` is ours — we register it with `addCallback`, so nothing
+  upstream constrains the spelling. Same for `enqueue_visit`, `queue_size`, `run_pipetask` and
+  `current_visit`.
 - Test fixtures and helpers use camelCase (`actorConfig`, `drpQaDir`, `processingQueue`,
   `previousLevel`) to match the actor API they stand in for. Follow the surrounding style.
-- New code that is *not* actor-facing should be plain snake_case (`enqueue_visit`, `queue_size`,
-  `run_pipetask`, `current_visit`).
 
 ## Adding a command
 
