@@ -100,7 +100,7 @@ class TestConnectionMade:
 
     def test_subscribes_to_the_drp_model(self, qaActor):
         qaActor.connectionMade()
-        assert qaActor.addedModels == [("drp",)]
+        assert qaActor.addedModels == [("drp2",)]
 
     def test_registers_the_status_callback_without_firing_it(self, qaActor):
         qaActor.connectionMade()
