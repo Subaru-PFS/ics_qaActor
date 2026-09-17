@@ -4,6 +4,10 @@ import queue
 import subprocess
 import threading
 
+#: Seconds a single `pipetask` run may take before it is killed. Overridable as
+#: `engine.timeout` in qa.yaml; set it to 0 or null there to disable the watchdog.
+DEFAULT_TIMEOUT = 3600
+
 
 class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController
     """QA processing loop.
@@ -16,7 +20,12 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
     def __init__(self, actor, name: str, logLevel: int = logging.DEBUG):
         super().__init__(daemon=True, name=name)
         self.actor = actor
-        self.logger = actor.logger
+
+        # A child of the actor's logger, not the actor's logger itself: that one
+        # is the shared `actor` logger whose level comes from logging.baseLevel in
+        # the config, so setting the level on it here would quietly re-level the
+        # whole actor. Records still propagate to the actor's handlers.
+        self.logger = actor.logger.getChild(name)
         self.logger.setLevel(logLevel)
 
         self.logger.info(f"Setting up QA with {name=}")
@@ -32,6 +41,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         self.output_collection = cfg["butler"]["output"]
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
         self.num_procs = cfg.get("num_procs", 8)
+        self.timeout = cfg.get("timeout", DEFAULT_TIMEOUT)
 
         self.processing_queue = queue.Queue()
 
@@ -60,7 +70,9 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         """Ask the QA processing loop to exit.
 
         The thread is a daemon, so it also goes away with the actor process; the
-        sentinel just lets an idle loop unblock and exit cleanly.
+        sentinel just lets an idle loop unblock and exit cleanly. This is
+        cooperative on purpose — a visit already being processed runs to
+        completion rather than being killed mid-pipeline.
         """
         self.logger.info("Stopping QA processing loop")
         self.processing_queue.put(None)
@@ -120,27 +132,66 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         - Constructs the pipetask command using `pipetask_cmd()`
         - Redirects stderr to stdout to ensure all pipeline output is captured
         - Streams pipeline output in real-time to the logger at the INFO level
+        - Kills the pipeline, and logs it, if it outlives `self.timeout`
         - Logs warnings if the pipeline fails (non-zero return code)
         - Logs a success message when the pipeline completes successfully
         """
         cmd = self.pipetask_cmd(visit_id)
         self.logger.info(f"Running: {' '.join(cmd)}")
 
+        timed_out = threading.Event()
+
         # pipetask writes its own log to stderr, so fold it into stdout: a single
         # stream is all that streams reliably from one reader thread, and there is
         # no second pipe left undrained to fill up and block the child.
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        #
+        # Popen as a context manager so the stdout pipe is closed and the child
+        # reaped even if the read loop raises; otherwise the descriptor lives on
+        # until the next garbage collection, once per visit, all night.
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as process:
+            # A hung pipetask would otherwise block this thread — the actor's only
+            # QA consumer — forever, with the stop sentinel never read. Kill it
+            # from a watchdog rather than timing out the wait: the loop below
+            # blocks on reading a silent child, so a deadline on wait() alone
+            # would never be reached.
+            watchdog = self._start_watchdog(process, visit_id, timed_out)
+            try:
+                for line in process.stdout:
+                    self.logger.info(line.rstrip())
+                process.wait()
+            finally:
+                if watchdog is not None:
+                    watchdog.cancel()
 
-        for line in process.stdout:
-            self.logger.info(line.rstrip())
-
-        process.wait()
-
-        if process.returncode != 0:
+        # `and returncode` guards the narrow race where the watchdog fires just
+        # as the pipeline exits cleanly: a killed child reports a signal exit, so
+        # a zero return code means it really did finish in time.
+        if timed_out.is_set() and process.returncode != 0:
+            self.logger.warning(f"QA pipetask timed out for {visit_id=} after {self.timeout}s, killed")
+            self.logger.warning(f"Timed out command: {' '.join(cmd)}")
+        elif process.returncode != 0:
             self.logger.warning(f"QA pipetask failed for {visit_id=} (returncode {process.returncode})")
             self.logger.warning(f"Failed command: {' '.join(cmd)}")
         else:
             self.logger.info(f"QA complete for {visit_id=}")
+
+    def _start_watchdog(self, process, visit_id, timed_out):
+        """Arm a timer that kills `process` once `self.timeout` has elapsed.
+
+        Returns None when no timeout is configured.
+        """
+        if not self.timeout:
+            return None
+
+        def kill():
+            timed_out.set()
+            self.logger.warning(f"QA pipetask for {visit_id=} exceeded {self.timeout}s, killing it")
+            process.kill()
+
+        watchdog = threading.Timer(self.timeout, kill)
+        watchdog.daemon = True
+        watchdog.start()
+        return watchdog
 
     def enqueue_visit(self, visit_id):
         """Enqueue a visit for QA processing (called by the Drp model).

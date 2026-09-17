@@ -106,6 +106,11 @@ class TestStatus:
         ]
 
 
+def _unescape(line):
+    """Undo qstr's backslash escaping, to compare against the raw value."""
+    return line.replace('\\"', '"')
+
+
 class TestShow:
     def test_dumps_every_keyvar_from_every_model(self, qaCmd, cmd, actor):
         actor.models["drp"] = FakeModel({"reduceExposureStatus": "statusValue"})
@@ -118,6 +123,48 @@ class TestShow:
             "text=\"'stateValue'\"",
         ]
         assert cmd.finished
+
+    def test_quotes_values_that_contain_a_double_quote(self, qaCmd, cmd, actor):
+        """A repr with an inner double quote must not break out of text="...".
+
+        Python flips a string's repr to double quotes as soon as it holds an
+        apostrophe, so a keyvar carrying a message like `can't open file` is the
+        realistic trigger — drp.reduceExposureStatus has a statusStr field.
+        """
+        import opscore.actor.keyvar as keyvar
+        import opscore.protocols.keys as keys
+
+        key = keys.Key("reduceExposureStatus", types.Int(), types.String())
+        var = keyvar.KeyVar("drp", key)
+        var.set(["1", "can't open file"])
+        assert '"' in repr(var), "this test is pointless if the repr has no inner quote"
+
+        actor.models["drp"] = FakeModel({"reduceExposureStatus": var})
+
+        qaCmd.show(cmd)
+
+        (line,) = cmd.informs
+        assert line.startswith('text="') and line.endswith('"')
+        # Every inner quote is escaped, so the value survives as one MHS token.
+        assert '\\"' in line
+        assert _unescape(line) == f'text="{var!r}"'
+
+    def test_quotes_a_broken_models_error_message(self, qaCmd, cmd, actor):
+        class BrokenModel:
+            @property
+            def keyVarDict(self):
+                raise RuntimeError('it said "no"')
+
+        actor.models["broken"] = BrokenModel()
+
+        qaCmd.show(cmd)
+
+        (warning,) = cmd.warns
+        assert warning.startswith('text="') and warning.endswith('"')
+        # The quotes inside the exception message must be escaped, not passed
+        # through to close the value early.
+        assert warning == r'text="QaCmd.show: broken: it said \"no\""'
+        assert _unescape(warning) == 'text="QaCmd.show: broken: it said "no""'
 
     def test_finishes_cleanly_with_no_models(self, qaCmd, cmd):
         qaCmd.show(cmd)

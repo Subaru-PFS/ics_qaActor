@@ -4,10 +4,26 @@ from actorcore.Actor import Actor
 
 
 class Drp:
-    def __init__(self, *, actor: Actor, processing_queue: queue.Queue, logger):
+    def __init__(self, *, actor: Actor, logger):
         self.actor = actor
         self.logger = logger
-        self.queue = processing_queue
+
+    @property
+    def queue(self) -> queue.Queue:
+        """The live QA controller's processing queue.
+
+        Resolved on every access rather than captured at construction: the actor
+        re-runs `connectionMade` on each hub reconnect, and `ICC.attachController`
+        builds a fresh `qa` controller — with a fresh queue — each time. A queue
+        captured once would be orphaned by the first reconnect, and every visit
+        put on it afterwards would be dropped without a trace.
+
+        Raises
+        ------
+        KeyError
+            If the QA controller is not currently attached.
+        """
+        return self.actor.controllers["qa"].processing_queue
 
     def check_reduced_exposure_status(self, key):
         """Check the reduced exposure status key and add visit_ids to the processing queue.
@@ -29,6 +45,8 @@ class Drp:
         - Only processes keys that are both current and genuine
         - Logs a warning if the valueList is empty
         - The visit_id is cast to int before being added to the queue
+        - Logs a warning, rather than raising, if the QA controller is not attached;
+          opscore swallows exceptions raised out of keyvar callbacks
         """
         self.logger.info(
             f"check_reduced_exposure_status: "
@@ -47,5 +65,14 @@ class Drp:
                 return
 
             visit_id = int(key.valueList[0])
+
+            try:
+                processing_queue = self.queue
+            except KeyError:
+                self.logger.warning(
+                    f"check_reduced_exposure_status: QA controller is not attached, dropping {visit_id}"
+                )
+                return
+
             self.logger.info(f"Adding {visit_id} to QA processing queue")
-            self.queue.put(visit_id)
+            processing_queue.put(visit_id)
