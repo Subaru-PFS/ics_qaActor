@@ -67,8 +67,8 @@ Single test: append `::ClassName::test_name` to the file path, or use `-k <expr>
 .venv/bin/python -m pytest tests/test_qa_controller.py::TestRunPipetask -q
 ```
 
-The full suite is 116 tests and should be green. If a test module fails at *collection*, something is
-wrong with the environment, not the code — rebuild rather than working around it.
+The full suite should be green. If a test module fails at *collection*, something is wrong with the
+environment, not the code — rebuild rather than working around it.
 
 ### Do not use bare `uv run` here
 
@@ -134,7 +134,7 @@ VIRTUAL_ENV=$PWD/.venv uv pip install \
 as `git+https://` URLs, so without it those repos get cloned from GitHub *over* your local
 checkouts. That is why the third-party requirements are listed explicitly in the second install.
 
-Then confirm: `.venv/bin/python -m pytest tests -q` should report 116 passed.
+Then confirm: `.venv/bin/python -m pytest tests -q` passes.
 
 ## Known environment issues
 

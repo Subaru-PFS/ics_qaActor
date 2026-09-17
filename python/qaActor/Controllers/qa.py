@@ -184,6 +184,14 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             return None
 
         def kill():
+            # The timer can fire in the moment between the pipeline exiting and
+            # the `finally` below retiring it, so check before reporting a
+            # timeout for a run that actually finished. `Popen.kill` is itself
+            # race-safe — CPython polls and suppresses ProcessLookupError — so
+            # this guard is about what gets logged, not about the signal.
+            if process.poll() is not None:
+                return
+
             timed_out.set()
             self.logger.warning(f"QA pipetask for {visit_id=} exceeded {self.timeout}s, killing it")
             process.kill()

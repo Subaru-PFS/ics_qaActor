@@ -42,6 +42,10 @@ class FakePopen:
             self.returncode = self._exitCode
         return self.returncode
 
+    def poll(self):
+        """None while running, the exit status once finished — as Popen does."""
+        return self.returncode
+
     def kill(self):
         self.killed = True
         self.returncode = -9
@@ -390,6 +394,34 @@ class TestPipetaskTimeout:
 
         assert "QA complete for visit_id=42" in caplog.text
         assert "timed out" not in caplog.text
+
+    def test_a_watchdog_that_fires_after_the_pipeline_exits_stays_quiet(
+        self, controller, fakePopen, monkeypatch, caplog
+    ):
+        """The timer can fire between the pipeline exiting and `cancel` retiring it.
+
+        Firing then must not log a timeout for a run that actually finished, and
+        must not signal a reaped child.
+        """
+        calls = fakePopen(exitCode=0)
+        controller.timeout = 30
+
+        fired = []
+        realTimer = threading.Timer
+        monkeypatch.setattr(
+            threading, "Timer", lambda interval, fn: fired.append(fn) or realTimer(interval, fn)
+        )
+
+        controller.run_pipetask(42)
+        proc = calls[0]["proc"]
+        assert proc.returncode == 0, "the pipeline finished before the timer fires below"
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            fired[0]()
+
+        assert proc.killed is False, "a finished child must not be signalled"
+        assert caplog.text == "", "a finished run must not be reported as a timeout"
 
     def test_a_timed_out_visit_does_not_stop_the_loop(self, controller, monkeypatch, caplog):
         program = "import time; time.sleep(30)"
