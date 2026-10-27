@@ -76,6 +76,33 @@ visit behind it for the rest of the night.
 The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipeline package. The QA
 controller refuses to start if it is unset, rather than letting every visit fail inside `pipetask`.
 
+### Loading verdicts into qadb
+
+With an `engine.qadb` section, each visit's QA tables and per-image verdicts are copied into qadb
+after its `pipetask` (INSTRM-3040), by drp_qa's loader run the way `pipetask` is:
+`python $DRP_QA_DIR/bin.src/loadQadb.py -c <output> --visits <visit> --mode realtime ...`. Without
+the section nothing is loaded, and `start` logs so.
+
+```yaml
+  qadb:
+    host: pfsa-db            # required
+    port: 5436               # default 5436
+    user: pfs                # default pfs; must be allowed to write
+    dbname: qadb             # default qadb
+    opdb_host: db-ics        # optional: fills qadb's pfs_visit (description, design, issued_at)
+    timeout: 300             # seconds before a hung load is killed; default 300, 0 to disable
+    loader: "$DRP_QA_DIR/bin.src/loadQadb.py"   # default
+```
+
+- The load runs after every `pipetask`, failed or killed ones included: `pipetask` exits non-zero
+  when any quantum fails, and the images it did judge are in the Butler. The loader is idempotent,
+  so a visit processed again is replaced, not duplicated.
+- A failed load is logged and the loop carries on; the Butler stays the record, and the logged
+  command loads the visit again by hand.
+- The password comes from the actor user's `~/.pgpass`; the opdb is read as `public_user`.
+- Without `opdb_host`, qadb's `pfs_visit` rows have no `issued_at`, and the QA dashboard
+  (PIPE2D-1924) has no visit times.
+
 ## MHS Interface
 
 ### Keys consumed
