@@ -12,6 +12,12 @@ UNEXPANDED_VAR = re.compile(r"\$\{?\w+")
 #: `engine.timeout` in qa.yaml; set it to 0 or null there to disable the watchdog.
 DEFAULT_TIMEOUT = 600
 
+#: Seconds a qadb load may take before it is killed. Overridable as `engine.qadb.timeout`.
+DEFAULT_LOAD_TIMEOUT = 300
+
+#: drp_qa's loader, which copies a visit's QA tables from the Butler into qadb (PIPE2D-1385).
+DEFAULT_LOADER = "$DRP_QA_DIR/bin.src/loadQadb.py"
+
 
 class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController
     """QA processing loop.
@@ -59,6 +65,26 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             )
         self.timeout = cfg.get("timeout", DEFAULT_TIMEOUT)
 
+        # Optional (INSTRM-3040): with `engine.qadb.load`, each visit's verdicts are copied into the
+        # qadb that the shared config (actors.yaml, merged into this one) names as `db.qadb`; without
+        # it they stay in the Butler only. The opdb, `db.opdb`, fills qadb's visit rows.
+        load = cfg.get("qadb") or {}
+        self.qadb = None
+        if load.get("load"):
+            databases = actor.actorConfig.get("db") or {}
+            if not databases.get("qadb"):
+                raise RuntimeError("engine.qadb.load is set but the config has no db.qadb (actors.yaml)")
+            self.qadb = databases["qadb"]
+            self.opdb_host = (databases.get("opdb") or {}).get("host")
+            self.loader_path = os.path.expandvars(load.get("loader", DEFAULT_LOADER))
+            unexpanded = UNEXPANDED_VAR.search(self.loader_path)
+            if unexpanded:
+                raise RuntimeError(
+                    f"qadb loader path {self.loader_path!r} still contains {unexpanded.group()!r} "
+                    f"after expansion — is DRP_QA_DIR set in the actor's environment?"
+                )
+            self.load_timeout = load.get("timeout", DEFAULT_LOAD_TIMEOUT)
+
         self.processing_queue = queue.Queue()
 
         self._current_visit = None
@@ -75,6 +101,13 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         self.logger.info(f"Datastore: {self.datastore}")
         self.logger.info(f"Input collections: {self.input_collections}")
         self.logger.info(f"Output collection: {self.output_collection}")
+        if self.qadb is None:
+            self.logger.info("qadb: not loading (engine.qadb.load is not set)")
+        else:
+            self.logger.info(
+                f"qadb: loading each visit to {self.qadb['host']}:{self.qadb.get('port', 5436)} "
+                f"as {self.qadb.get('user', 'pfs')}, with {self.loader_path}"
+            )
 
         super().start()
 
@@ -113,6 +146,9 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
                 self._current_visit = visit_id
                 self.logger.info(f"Processing visit: {visit_id}")
                 self.run_pipetask(visit_id)
+                # Even after a failed or killed pipetask: the images it did judge are in the
+                # Butler, and the loader loads what it finds.
+                self.load_qadb(visit_id)
             except Exception as e:
                 self.logger.warning(f"Error processing {visit_id=}: {e}")
             finally:
@@ -153,6 +189,79 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         - Logs a success message when the pipeline completes successfully
         """
         cmd = self.pipetask_cmd(visit_id)
+        returncode, timed_out = self._run_streamed(cmd, visit_id, self._start_watchdog)
+
+        # `and returncode` guards the narrow race where the watchdog fires just
+        # as the pipeline exits cleanly: a killed child reports a signal exit, so
+        # a zero return code means it really did finish in time.
+        if timed_out and returncode != 0:
+            self.logger.warning(f"QA pipetask timed out for {visit_id=} after {self.timeout}s, killed")
+            self.logger.warning(f"Timed out command: {' '.join(cmd)}")
+        elif returncode != 0:
+            self.logger.warning(f"QA pipetask failed for {visit_id=} (returncode {returncode})")
+            self.logger.warning(f"Failed command: {' '.join(cmd)}")
+        else:
+            self.logger.info(f"QA complete for {visit_id=}")
+
+    def load_cmd(self, visit_id):
+        """Build the loader's command line for a single visit; None when qadb is not configured.
+
+        `python` is the one on PATH, as `pipetask` is: the stack's, which the loader needs.
+        """
+        if self.qadb is None:
+            return None
+        # fmt: off
+        cmd = [
+            "python", self.loader_path,
+            "-b", self.datastore,
+            "-c", self.output_collection,
+            "--visits", f"{visit_id}",
+            "--mode", "realtime",
+            "--host", f"{self.qadb['host']}",
+            "--port", f"{self.qadb.get('port', 5436)}",
+            "--user", f"{self.qadb.get('user', 'pfs')}",
+            "--dbname", f"{self.qadb.get('dbname', 'qadb')}",
+        ]
+        # fmt: on
+        # The opdb fills qadb's pfs_visit (description, design, issued_at: the dashboard's visit times).
+        if self.opdb_host:
+            cmd += ["--opdb-host", f"{self.opdb_host}"]
+        return cmd
+
+    def load_qadb(self, visit_id):
+        """Load a visit's QA tables and verdicts into qadb, if configured; log the outcome.
+
+        The loader is idempotent, so a visit loaded twice (a re-run, `qa process`) is replaced,
+        not duplicated. A failure is logged and does not stop the loop: the Butler stays the
+        record, and the visit can be loaded again later with the same command.
+        """
+        cmd = self.load_cmd(visit_id)
+        if cmd is None:
+            return
+
+        def watchdog(process, visit_id, timed_out):
+            return self._start_watchdog(process, visit_id, timed_out, self.load_timeout, "qadb load")
+
+        returncode, timed_out = self._run_streamed(cmd, visit_id, watchdog)
+        if timed_out and returncode != 0:
+            self.logger.warning(f"qadb load timed out for {visit_id=} after {self.load_timeout}s, killed")
+            self.logger.warning(f"Timed out command: {' '.join(cmd)}")
+        elif returncode != 0:
+            self.logger.warning(f"qadb load failed for {visit_id=} (returncode {returncode})")
+            self.logger.warning(f"Failed command: {' '.join(cmd)}")
+        else:
+            self.logger.info(f"qadb loaded for {visit_id=}")
+
+    def _run_streamed(self, cmd, visit_id, start_watchdog):
+        """Run `cmd`, relaying its output to the log, under a watchdog.
+
+        Returns
+        -------
+        returncode : int
+            The child's exit status.
+        timed_out : bool
+            Whether the watchdog fired (check `returncode` too: see `run_pipetask`).
+        """
         self.logger.info(f"Running: {' '.join(cmd)}")
 
         timed_out = threading.Event()
@@ -170,7 +279,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             # from a watchdog rather than timing out the wait: the loop below
             # blocks on reading a silent child, so a deadline on wait() alone
             # would never be reached.
-            watchdog = self._start_watchdog(process, visit_id, timed_out)
+            watchdog = start_watchdog(process, visit_id, timed_out)
             try:
                 for line in process.stdout:
                     self.logger.info(line.rstrip())
@@ -179,24 +288,15 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
                 if watchdog is not None:
                     watchdog.cancel()
 
-        # `and returncode` guards the narrow race where the watchdog fires just
-        # as the pipeline exits cleanly: a killed child reports a signal exit, so
-        # a zero return code means it really did finish in time.
-        if timed_out.is_set() and process.returncode != 0:
-            self.logger.warning(f"QA pipetask timed out for {visit_id=} after {self.timeout}s, killed")
-            self.logger.warning(f"Timed out command: {' '.join(cmd)}")
-        elif process.returncode != 0:
-            self.logger.warning(f"QA pipetask failed for {visit_id=} (returncode {process.returncode})")
-            self.logger.warning(f"Failed command: {' '.join(cmd)}")
-        else:
-            self.logger.info(f"QA complete for {visit_id=}")
+        return process.returncode, timed_out.is_set()
 
-    def _start_watchdog(self, process, visit_id, timed_out):
-        """Arm a timer that kills `process` once `self.timeout` has elapsed.
+    def _start_watchdog(self, process, visit_id, timed_out, timeout=None, what="QA pipetask"):
+        """Arm a timer that kills `process` once `timeout` (default `self.timeout`) has elapsed.
 
         Returns None when no timeout is configured.
         """
-        if not self.timeout:
+        timeout = self.timeout if timeout is None else timeout
+        if not timeout:
             return None
 
         def kill():
@@ -209,10 +309,10 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
                 return
 
             timed_out.set()
-            self.logger.warning(f"QA pipetask for {visit_id=} exceeded {self.timeout}s, killing it")
+            self.logger.warning(f"{what} for {visit_id=} exceeded {timeout}s, killing it")
             process.kill()
 
-        watchdog = threading.Timer(self.timeout, kill)
+        watchdog = threading.Timer(timeout, kill)
         watchdog.daemon = True
         watchdog.start()
         return watchdog
