@@ -16,14 +16,25 @@ from qaActor.Controllers.qa import DEFAULT_LOAD_TIMEOUT, qa
 from .conftest import FakeActor
 from .test_qa_controller import FakePopen
 
-QADB = {"host": "pfsa-db", "port": 5436, "user": "pfs", "dbname": "qadb", "opdb_host": "db-ics"}
+#: The shared config's databases (actors.yaml), as merged into the actor's.
+DB = {
+    "opdb": {"host": "db-ics", "dbname": "opdb", "port": 5432, "user": "pfs"},
+    "qadb": {"host": "qadb-host", "dbname": "qadb", "port": 5436, "user": "pfs"},
+}
 
 
 @pytest.fixture
-def loading(actorConfig, logger, drpQaDir):
+def sharedConfig(actorConfig):
+    """The qa config with actors.yaml's `db` section merged in, and loading switched on."""
+    actorConfig["db"] = {name: dict(params) for name, params in DB.items()}
+    actorConfig["engine"]["qadb"] = {"load": True}
+    return actorConfig
+
+
+@pytest.fixture
+def loading(sharedConfig, logger, drpQaDir):
     """A controller configured to load into qadb."""
-    actorConfig["engine"]["qadb"] = dict(QADB)
-    return qa(FakeActor(actorConfig, logger), "qa")
+    return qa(FakeActor(sharedConfig, logger), "qa")
 
 
 @pytest.fixture
@@ -52,26 +63,38 @@ class TestConfig:
         controller.load_qadb(42)
         assert calls == []
 
+    def test_the_shared_db_section_alone_does_not_switch_loading_on(self, sharedConfig, logger, drpQaDir):
+        # Every actor gets db.qadb from actors.yaml; only qa.yaml's engine.qadb.load loads.
+        del sharedConfig["engine"]["qadb"]
+        assert qa(FakeActor(sharedConfig, logger), "qa").qadb is None
+
+    def test_loading_without_a_db_qadb_fails_at_construction(self, sharedConfig, logger, drpQaDir):
+        del sharedConfig["db"]["qadb"]
+        with pytest.raises(RuntimeError, match=r"db\.qadb"):
+            qa(FakeActor(sharedConfig, logger), "qa")
+
+    def test_connects_where_the_shared_config_says(self, loading):
+        assert loading.qadb == DB["qadb"] and loading.opdb_host == "db-ics"
+
     def test_the_loader_path_is_expanded_against_the_environment(self, loading):
         assert loading.loader_path == "/opt/drp_qa/bin.src/loadQadb.py"
 
-    def test_an_unset_loader_env_var_fails_at_construction(self, actorConfig, logger, monkeypatch):
-        actorConfig["engine"]["qadb"] = dict(QADB)
-        actorConfig["engine"]["pipeline"] = "/literal/drpQA.yaml"
+    def test_an_unset_loader_env_var_fails_at_construction(self, sharedConfig, logger, monkeypatch):
+        sharedConfig["engine"]["pipeline"] = "/literal/drpQA.yaml"
         monkeypatch.delenv("DRP_QA_DIR", raising=False)
         with pytest.raises(RuntimeError, match="DRP_QA_DIR"):
-            qa(FakeActor(actorConfig, logger), "qa")
+            qa(FakeActor(sharedConfig, logger), "qa")
 
-    def test_the_load_timeout_defaults_and_is_configurable(self, loading, actorConfig, logger, drpQaDir):
+    def test_the_load_timeout_defaults_and_is_configurable(self, loading, sharedConfig, logger, drpQaDir):
         assert loading.load_timeout == DEFAULT_LOAD_TIMEOUT
-        actorConfig["engine"]["qadb"] = {**QADB, "timeout": 60}
-        assert qa(FakeActor(actorConfig, logger), "qa").load_timeout == 60
+        sharedConfig["engine"]["qadb"]["timeout"] = 60
+        assert qa(FakeActor(sharedConfig, logger), "qa").load_timeout == 60
 
     def test_start_says_where_it_loads(self, loading, caplog):
         loading.run_pipetask = lambda visitId: None
         with caplog.at_level(logging.INFO):
             loading.start()
-        assert "qadb: loading each visit to pfsa-db:5436 as pfs" in caplog.text
+        assert "qadb: loading each visit to qadb-host:5436 as pfs" in caplog.text
 
     def test_start_says_when_it_does_not_load(self, controller, caplog):
         controller.run_pipetask = lambda visitId: None
@@ -88,7 +111,7 @@ class TestLoadCmd:
             "-c", "qaActor/reductions",
             "--visits", "42",
             "--mode", "realtime",
-            "--host", "pfsa-db",
+            "--host", "qadb-host",
             "--port", "5436",
             "--user", "pfs",
             "--dbname", "qadb",
@@ -99,9 +122,10 @@ class TestLoadCmd:
         cmd = loading.load_cmd(42)
         assert cmd[cmd.index("-c") + 1] == loading.output_collection
 
-    def test_without_an_opdb_host_the_flag_is_left_out(self, actorConfig, logger, drpQaDir):
-        actorConfig["engine"]["qadb"] = {"host": "pfsa-db"}
-        cmd = qa(FakeActor(actorConfig, logger), "qa").load_cmd(42)
+    def test_without_an_opdb_host_the_flag_is_left_out(self, sharedConfig, logger, drpQaDir):
+        del sharedConfig["db"]["opdb"]
+        sharedConfig["db"]["qadb"] = {"host": "qadb-host"}
+        cmd = qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42)
         assert "--opdb-host" not in cmd
         # The loader's own defaults, spelled out.
         assert cmd[cmd.index("--port") + 1] == "5436" and cmd[cmd.index("--user") + 1] == "pfs"
