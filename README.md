@@ -78,10 +78,11 @@ controller refuses to start if it is unset, rather than letting every visit fail
 
 ### Loading verdicts into qadb
 
-With `engine.qadb.load` set, each visit's QA tables and per-image verdicts are copied into qadb
-after its `pipetask` (INSTRM-3040), by drp_qa's loader run the way `pipetask` is:
-`python $DRP_QA_DIR/bin.src/loadQadb.py -c <output> --visits <visit> --mode realtime ...`. Without
-it nothing is loaded, and `start` logs so.
+Each visit's QA tables and per-image verdicts are copied into qadb after its `pipetask`
+(INSTRM-3040), by drp_qa's loader run the way `pipetask` is:
+`python $DRP_QA_DIR/bin.src/loadQadb.py -c <output> --visits <visit> --mode realtime ...`.
+`engine.qadb.load` defaults to on; `load: false` switches it off, and `start` and `status` say
+whether it is loading. `qa qadb on|off` switches it while the actor runs (see *Commands accepted*).
 
 Where to connect comes from the shared actor config (`pfs_instdata/config/actors/actors.yaml`, merged
 into `actorConfig`), as for the other actors' databases: `db.qadb` (`host` required; `port`, `user`,
@@ -90,12 +91,13 @@ into `actorConfig`), as for the other actors' databases: `db.qadb` (`host` requi
 
 ```yaml
   qadb:
-    load: true               # copy each visit's verdicts into db.qadb
+    load: true               # copy each visit's verdicts into db.qadb; default true
     timeout: 300             # seconds before a hung load is killed; default 300, 0 to disable
     loader: "$DRP_QA_DIR/bin.src/loadQadb.py"   # default
 ```
 
-- `load` set without a `db.qadb` stops the actor at startup, rather than failing every visit.
+- `load: true` set without a `db.qadb` stops the actor at startup, rather than failing every
+  visit. With `load` left unset, a missing `db.qadb` only means nothing is loaded.
 - The load runs after every `pipetask`, failed or killed ones included: `pipetask` exits non-zero
   when any quantum fails, and the images it did judge are in the Butler. The loader is idempotent,
   so a visit processed again is replaced, not duplicated.
@@ -124,9 +126,13 @@ the key definitions come from `actorkeys/drp.py` even though the model is regist
 | Command              | Description                                                                                             |
 |----------------------|---------------------------------------------------------------------------------------------------------|
 | `ping`               | Returns the product name; used as a liveness check                                                      |
-| `status`             | Reports the current processing queue depth                                                              |
+| `status`             | Reports the visit being processed, the queue depth, and whether each visit is loaded into qadb          |
 | `show`               | Dumps all key-value pairs from all subscribed MHS models                                                |
 | `process <visit_id>` | Manually enqueues a visit ID for QA processing (bypasses the automatic `reduceExposureStatus` listener) |
+| `qadb on\|off`       | Switches loading into qadb on or off from the next visit's load; fails if `on` has no `db.qadb`         |
+
+`qadb on|off` lasts until the controller is rebuilt (an actor restart, or `disconnect`/`connect
+controller=qa`); `engine.qadb.load` applies again after that.
 
 The processing loop runs whenever the actor is running; stop or restart the actor itself rather than the loop.
 
