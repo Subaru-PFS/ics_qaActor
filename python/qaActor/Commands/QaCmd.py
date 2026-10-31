@@ -13,6 +13,7 @@ class QaCmd:
             ("status", "", self.status),
             ("show", "", self.show),
             ("process", "<visit_id>", self.process_visit),
+            ("qadb", "@(on|off)", self.qadb),
         ]
         self.keys = keys.KeysDictionary(
             "qa_qa",
@@ -40,6 +41,7 @@ class QaCmd:
             cmd.inform(f'text="QA currently processing: {visit_id}"')
 
         cmd.inform(f'text="QA processing queue size: {controller.queue_size()}"')
+        cmd.inform(f"text={qstr(controller.describe_qadb_load())}")
         cmd.finish()
 
     def show(self, cmd):
@@ -72,3 +74,19 @@ class QaCmd:
         self._get_controller().enqueue_visit(visit_id)
         cmd.inform(f'text="Enqueued {visit_id=} for QA processing"')
         cmd.finish()
+
+    def qadb(self, cmd):
+        """Switch loading each visit into qadb on or off, until the controller is rebuilt.
+
+        It applies from the next visit's load, including the visit in `pipetask` now; the
+        config's `engine.qadb.load` applies again after an actor restart or controller reconnect.
+        """
+        enabled = "on" in cmd.cmd.keywords
+        try:
+            self._get_controller().set_qadb_load(enabled)
+        except RuntimeError as e:
+            cmd.fail(f"text={qstr(str(e))}")
+            return
+        message = self._get_controller().describe_qadb_load()
+        self.actor.logger.info(message)
+        cmd.finish(f"text={qstr(message)}")

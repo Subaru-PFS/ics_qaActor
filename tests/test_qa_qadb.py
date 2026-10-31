@@ -63,10 +63,18 @@ class TestConfig:
         controller.load_qadb(42)
         assert calls == []
 
-    def test_the_shared_db_section_alone_does_not_switch_loading_on(self, sharedConfig, logger, drpQaDir):
-        # Every actor gets db.qadb from actors.yaml; only qa.yaml's engine.qadb.load loads.
+    def test_loading_defaults_on_when_the_config_has_a_db_qadb(self, sharedConfig, logger, drpQaDir):
         del sharedConfig["engine"]["qadb"]
-        assert qa(FakeActor(sharedConfig, logger), "qa").qadb is None
+        assert qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42) is not None
+        # Negative control: an explicit `load: false` still switches it off.
+        sharedConfig["engine"]["qadb"] = {"load": False}
+        assert qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42) is None
+
+    def test_the_default_without_a_db_qadb_does_not_load_or_fail(self, sharedConfig, logger, drpQaDir):
+        del sharedConfig["engine"]["qadb"]
+        del sharedConfig["db"]["qadb"]
+        ctrl = qa(FakeActor(sharedConfig, logger), "qa")
+        assert not ctrl.qadb_load and ctrl.load_cmd(42) is None
 
     def test_loading_without_a_db_qadb_fails_at_construction(self, sharedConfig, logger, drpQaDir):
         del sharedConfig["db"]["qadb"]
@@ -100,7 +108,50 @@ class TestConfig:
         controller.run_pipetask = lambda visitId: None
         with caplog.at_level(logging.INFO):
             controller.start()
-        assert "qadb: not loading" in caplog.text
+        assert "qadb: not loading (the config has no db.qadb)" in caplog.text
+
+    def test_start_says_when_it_is_switched_off(self, sharedConfig, logger, drpQaDir, caplog):
+        sharedConfig["engine"]["qadb"] = {"load": False}
+        ctrl = qa(FakeActor(sharedConfig, logger), "qa")
+        ctrl.run_pipetask = lambda visitId: None
+        with caplog.at_level(logging.INFO):
+            ctrl.start()
+        ctrl.stop()
+        ctrl.join(timeout=5)
+        assert "qadb: not loading (switched off)" in caplog.text
+
+
+class TestSetQadbLoad:
+    def test_switching_off_and_on_again(self, loading, popens):
+        calls = popens(0)
+        loading.set_qadb_load(False)
+        assert loading.load_cmd(42) is None
+        loading.load_qadb(42)
+        assert calls == []
+
+        loading.set_qadb_load(True)
+        loading.load_qadb(42)
+        assert calls == [loading.load_cmd(42)]
+
+    def test_switching_on_without_a_db_qadb_raises_and_stays_off(self, controller):
+        with pytest.raises(RuntimeError, match=r"db\.qadb"):
+            controller.set_qadb_load(True)
+        assert not controller.qadb_load
+
+    def test_switching_on_with_an_unset_loader_var_raises_and_stays_off(self, sharedConfig, logger, drpQaDir):
+        sharedConfig["engine"]["qadb"] = {"load": False, "loader": "$QA_TEST_UNSET_VAR/loadQadb.py"}
+        ctrl = qa(FakeActor(sharedConfig, logger), "qa")
+        with pytest.raises(RuntimeError, match="QA_TEST_UNSET_VAR"):
+            ctrl.set_qadb_load(True)
+        assert not ctrl.qadb_load
+
+    def test_switching_off_during_a_pipetask_skips_that_visits_load(self, loading, popens):
+        calls = popens()
+        loading.run_pipetask = lambda visitId: loading.set_qadb_load(False)
+        loading.enqueue_visit(42)
+        loading.stop()
+        loading.run()
+        assert calls == []
 
 
 class TestLoadCmd:

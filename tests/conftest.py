@@ -42,6 +42,7 @@ class FakeCmd:
         self.informs = []
         self.warns = []
         self.finishes = []
+        self.fails = []
 
     def inform(self, msg):
         self.informs.append(msg)
@@ -52,13 +53,16 @@ class FakeCmd:
     def finish(self, msg=""):
         self.finishes.append(msg)
 
+    def fail(self, msg=""):
+        self.fails.append(msg)
+
     @property
     def finished(self):
         return bool(self.finishes)
 
     @property
     def messages(self):
-        return self.informs + self.warns + self.finishes
+        return self.informs + self.warns + self.finishes + self.fails
 
 
 class FakeActor:

@@ -38,7 +38,23 @@ class TestWiring:
             ("status", ""),
             ("show", ""),
             ("process", "<visit_id>"),
+            ("qadb", "@(on|off)"),
         ]
+
+    def test_qadb_parses_on_and_off_and_nothing_else(self, qaCmd):
+        # Through opscore's real parser and validator, as the actor's command link does.
+        import opscore.protocols.parser as parser
+        import opscore.protocols.validation as validation
+
+        (argSpec,) = [args for name, args, _ in qaCmd.vocab if name == "qadb"]
+        validator = validation.Cmd("qadb", argSpec, callback=qaCmd.qadb)
+        validator.callbacks = None  # match() returns this; the actor's link sets it, offline nothing does.
+        for word in ("on", "off"):
+            parsed = parser.CommandParser().parse(f"qadb {word}")
+            assert validator.match(parsed)
+            assert ("on" in parsed.keywords) == (word == "on")
+        # Negative control: anything else is refused before the handler runs.
+        assert not validator.match(parser.CommandParser().parse("qadb maybe"))
 
     def test_every_vocabulary_entry_points_at_a_handler(self, qaCmd):
         for name, _, handler in qaCmd.vocab:
@@ -70,6 +86,7 @@ class TestStatus:
         assert cmd.informs == [
             'text="QA currently processing: idle"',
             'text="QA processing queue size: 0"',
+            'text="qadb: not loading (the config has no db.qadb)"',
         ]
         assert cmd.finished
 
@@ -89,6 +106,7 @@ class TestStatus:
         assert cmd.informs == [
             'text="QA currently processing: 12345"',
             'text="QA processing queue size: 0"',
+            'text="qadb: not loading (the config has no db.qadb)"',
         ]
         assert cmd.finished
 
@@ -103,6 +121,7 @@ class TestStatus:
         assert cmd.informs == [
             'text="QA currently processing: 12345"',
             'text="QA processing queue size: 1"',
+            'text="qadb: not loading (the config has no db.qadb)"',
         ]
 
 
@@ -223,3 +242,45 @@ class TestProcessVisit:
             qaCmd.process_visit(KeywordCmd(visit_id=12345))
 
         assert "Manually enqueuing visit_id=12345 for QA processing" in caplog.text
+
+
+class TestQadb:
+    @pytest.fixture
+    def loadingCmd(self, actorConfig, logger, drpQaDir):
+        from qaActor.Controllers.qa import qa
+
+        from .conftest import FakeActor
+
+        actorConfig["db"] = {"qadb": {"host": "qadb-host"}}
+        actor = FakeActor(actorConfig, logger)
+        actor.controllers["qa"] = qa(actor, "qa")
+        return QaCmd(actor)
+
+    def test_off_then_on(self, loadingCmd):
+        controller = loadingCmd._get_controller()
+        cmd = KeywordCmd(off=None)
+        loadingCmd.qadb(cmd)
+        assert not controller.qadb_load
+        assert cmd.finishes == ['text="qadb: not loading (switched off)"']
+
+        cmd = KeywordCmd(on=None)
+        loadingCmd.qadb(cmd)
+        assert controller.qadb_load
+        assert cmd.finishes[0].startswith('text="qadb: loading each visit to qadb-host:5436')
+
+    def test_status_reports_the_switch(self, loadingCmd, cmd):
+        loadingCmd._get_controller().set_qadb_load(False)
+        loadingCmd.status(cmd)
+        assert cmd.informs[-1] == 'text="qadb: not loading (switched off)"'
+
+    def test_on_without_a_db_qadb_fails_the_command(self, qaCmd, controller):
+        cmd = KeywordCmd(on=None)
+        qaCmd.qadb(cmd)
+        assert not controller.qadb_load
+        assert cmd.finishes == []
+        assert cmd.fails == ['text="cannot load into qadb: the config has no db.qadb (actors.yaml)"']
+
+    def test_off_without_a_db_qadb_succeeds(self, qaCmd, controller):
+        cmd = KeywordCmd(off=None)
+        qaCmd.qadb(cmd)
+        assert cmd.fails == [] and cmd.finished

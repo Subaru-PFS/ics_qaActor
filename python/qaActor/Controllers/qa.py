@@ -65,29 +65,60 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             )
         self.timeout = cfg.get("timeout", DEFAULT_TIMEOUT)
 
-        # Optional (INSTRM-3040): with `engine.qadb.load`, each visit's verdicts are copied into the
-        # qadb that the shared config (actors.yaml, merged into this one) names as `db.qadb`; without
-        # it they stay in the Butler only. The opdb, `db.opdb`, fills qadb's visit rows.
+        # INSTRM-3040: each visit's verdicts are copied into the qadb that the shared config
+        # (actors.yaml, merged into this one) names as `db.qadb`; the opdb, `db.opdb`, fills qadb's
+        # visit rows. `engine.qadb.load` defaults to on, but an unset one only tries: without a
+        # db.qadb nothing is loaded and `start` says so. `qa qadb on|off` switches it at runtime.
         load = cfg.get("qadb") or {}
-        self.qadb = None
-        if load.get("load"):
-            databases = actor.actorConfig.get("db") or {}
-            if not databases.get("qadb"):
-                raise RuntimeError("engine.qadb.load is set but the config has no db.qadb (actors.yaml)")
-            self.qadb = databases["qadb"]
-            self.opdb_host = (databases.get("opdb") or {}).get("host")
-            self.loader_path = os.path.expandvars(load.get("loader", DEFAULT_LOADER))
+        databases = actor.actorConfig.get("db") or {}
+        self.qadb = databases.get("qadb") or None
+        self.opdb_host = (databases.get("opdb") or {}).get("host")
+        self.loader_path = os.path.expandvars(load.get("loader", DEFAULT_LOADER))
+        self.load_timeout = load.get("timeout", DEFAULT_LOAD_TIMEOUT)
+        self.qadb_load = False
+        if load.get("load", True):
+            try:
+                self.set_qadb_load(True)
+            except RuntimeError:
+                # A missing db.qadb stops the actor only under an explicit `load: true`; the
+                # default just doesn't load. An unset loader variable stops it either way.
+                if "load" in load or self.qadb is not None:
+                    raise
+
+        self.processing_queue = queue.Queue()
+
+        self._current_visit = None
+
+    def set_qadb_load(self, enabled):
+        """Switch loading into qadb on or off, from the next visit's load on.
+
+        Raises
+        ------
+        RuntimeError
+            Switching on without a db.qadb in the config, or with a loader path that still
+            holds an unset variable; loading is left as it was.
+        """
+        if enabled:
+            if self.qadb is None:
+                raise RuntimeError("cannot load into qadb: the config has no db.qadb (actors.yaml)")
             unexpanded = UNEXPANDED_VAR.search(self.loader_path)
             if unexpanded:
                 raise RuntimeError(
                     f"qadb loader path {self.loader_path!r} still contains {unexpanded.group()!r} "
                     f"after expansion — is DRP_QA_DIR set in the actor's environment?"
                 )
-            self.load_timeout = load.get("timeout", DEFAULT_LOAD_TIMEOUT)
+        self.qadb_load = bool(enabled)
 
-        self.processing_queue = queue.Queue()
-
-        self._current_visit = None
+    def describe_qadb_load(self):
+        """One line on whether, and where, each visit is loaded into qadb."""
+        if self.qadb_load:
+            return (
+                f"qadb: loading each visit to {self.qadb['host']}:{self.qadb.get('port', 5436)} "
+                f"as {self.qadb.get('user', 'pfs')}, with {self.loader_path}"
+            )
+        if self.qadb is None:
+            return "qadb: not loading (the config has no db.qadb)"
+        return "qadb: not loading (switched off)"
 
     @property
     def current_visit(self):
@@ -101,13 +132,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         self.logger.info(f"Datastore: {self.datastore}")
         self.logger.info(f"Input collections: {self.input_collections}")
         self.logger.info(f"Output collection: {self.output_collection}")
-        if self.qadb is None:
-            self.logger.info("qadb: not loading (engine.qadb.load is not set)")
-        else:
-            self.logger.info(
-                f"qadb: loading each visit to {self.qadb['host']}:{self.qadb.get('port', 5436)} "
-                f"as {self.qadb.get('user', 'pfs')}, with {self.loader_path}"
-            )
+        self.logger.info(self.describe_qadb_load())
 
         super().start()
 
@@ -209,11 +234,11 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             self.logger.info(f"QA complete for {visit_id=}")
 
     def load_cmd(self, visit_id):
-        """Build the loader's command line for a single visit; None when qadb is not configured.
+        """Build the loader's command line for a single visit; None when loading is off.
 
         `python` is the one on PATH, as `pipetask` is: the stack's, which the loader needs.
         """
-        if self.qadb is None:
+        if not self.qadb_load:
             return None
         # fmt: off
         cmd = [
