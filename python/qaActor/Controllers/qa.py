@@ -166,6 +166,11 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             "-b", self.datastore,
             "-i", self.input_collections,
             "-o", self.output_collection,
+            # The output chain stores the inputs flattened as they were at its first run, and
+            # drpActor prepends a new run to drpActor/reductions with each new reduction pipeline:
+            # without --rebase every later visit fails pipetask's consistency check, and with the
+            # check passing it would read the stale snapshot instead of the current inputs.
+            "--rebase",
             "-p", self.pipeline_path,
             "-d", f"visit = {visit_id}"
         ]
