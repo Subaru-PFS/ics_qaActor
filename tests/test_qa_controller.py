@@ -204,11 +204,17 @@ class TestPipetaskCmd:
             "PFS/calib/2024,drpActor/reductions,PFS/defaults",
             "-o",
             "qaActor/reductions",
+            "--rebase",
             "-p",
             "/opt/drp_qa/pipelines/drpQA.yaml",
             "-d",
             "visit = 12345",
         ]
+
+    def test_rebases_the_output_chain_onto_the_current_inputs(self, controller):
+        # The output chain keeps a flattened snapshot of the inputs, which drpActor's new runs
+        # make stale; without --rebase pipetask refuses every visit after the first new one.
+        assert "--rebase" in controller.pipetask_cmd(1)
 
     def test_num_procs_is_stringified_for_the_j_flag(self, controller):
         cmdLine = controller.pipetask_cmd(1)
