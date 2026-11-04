@@ -116,9 +116,11 @@ QA cannot see (PIPE2D-1973). So after each visit's load the actor runs drp_qa's 
 twilight that has finished (`iic_sequence_status`) with a `twilightFiberFlux` stored for every visit
 and camera; the call after the sequence's last visit judges it, and writes one verdict per exposure
 and arm (`PASS`, `WARN`, `FAIL` or `TOO_FAINT`, with the reasons) and the measurements behind it to
-qadb's `twilight_qa` and `twilight_qa_metric` (`spt_qa_database` 0.3.0). Its exit status tells the
+the Butler as `twilightQaMetrics` (a new RUN prepended to the output collection), then loads the
+sequence's visits into qadb: `twilight_qa`, and `qa_gate`, where the sequence check is a third task
+beside `imageQualityQa` and `dmLineResiduals` (`spt_qa_database` 0.3.0). Its exit status tells the
 actor what happened, and the actor logs it: judged, pending, not a twilight (quiet), or judged but
-not written to qadb, in which case the judge has printed the verdicts in full, so the actor log holds
+not stored or loaded, in which case the judge has printed the verdicts in full, so the actor log holds
 them.
 
 There is nothing to configure: the judge needs `db.opdb.host` (without it nothing is judged, and
