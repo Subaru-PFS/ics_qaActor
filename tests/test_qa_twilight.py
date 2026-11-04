@@ -65,7 +65,7 @@ class TestConfig:
             judging.start()
         assert (
             "twilight: judging each visit's sequence with /opt/drp_qa/bin.src/twilightQa.py, opdb db-ics,"
-            " verdicts into qadb at qadb-host:5436" in caplog.text
+            " verdicts into the Butler and qadb at qadb-host:5436" in caplog.text
         )
 
     def test_start_says_when_the_verdicts_go_to_the_log_alone(self, judging, caplog):
@@ -73,7 +73,7 @@ class TestConfig:
         judging.run_pipetask = lambda visitId: None
         with caplog.at_level(logging.INFO):
             judging.start()
-        assert "verdicts to the log alone (qadb loading is off)" in caplog.text
+        assert "verdicts into the Butler only (qadb loading is off" in caplog.text
 
     def test_start_says_when_it_does_not_judge(self, controller, caplog):
         controller.run_pipetask = lambda visitId: None
@@ -155,7 +155,7 @@ class TestJudgeTwilight:
         with caplog.at_level(logging.INFO):
             judging.judge_twilight(42)
         (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert "judged but not written to qadb" in warning.message
+        assert "judged but not stored in the Butler or loaded into qadb" in warning.message
         assert "qa twilight 42" in warning.message
 
     def test_any_other_status_is_a_failure(self, judging, popens, caplog):  # noqa: F811

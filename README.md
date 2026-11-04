@@ -114,9 +114,10 @@ QA cannot see (PIPE2D-1973). So after each visit's load the actor runs drp_qa's 
 `python $DRP_QA_DIR/bin.src/twilightQa.py -c <output> --sequence-of-visit <visit> --opdb-host <db.opdb.host> ...`
 (INSTRM-3089). The judge looks the visit's sequence up in the opdb and does nothing unless it is a
 twilight that has finished (`iic_sequence_status`) with a `twilightFiberFlux` stored for every visit
-and camera; the call after the sequence's last visit judges it, and writes one verdict per exposure
-and arm (`PASS`, `WARN`, `FAIL` or `TOO_FAINT`, with the reasons) and the measurements behind it to
-the Butler as `twilightQaMetrics` (a new RUN prepended to the output collection), then loads the
+and camera; the call after the sequence's last visit judges it. It prints one verdict per exposure
+and arm (`PASS`, `WARN`, `FAIL` or `TOO_FAINT`, with the reasons), stores one verdict per detector
+image (`PASS`, `WARN`, `FAIL`, or `UNKNOWN` for the unjudged n arm, with the measurements behind it)
+in the Butler as `twilightQaMetrics`, a new RUN prepended to the output collection, then loads the
 sequence's visits into qadb: `twilight_qa`, and `qa_gate`, where the sequence check is a third task
 beside `imageQualityQa` and `dmLineResiduals` (`spt_qa_database` 0.3.0). Its exit status tells the
 actor what happened, and the actor logs it: judged, pending, not a twilight (quiet), or judged but
@@ -124,10 +125,12 @@ not stored or loaded, in which case the judge has printed the verdicts in full, 
 them.
 
 There is nothing to configure: the judge needs `db.opdb.host` (without it nothing is judged, and
-`start` and `status` say so), writes to `db.qadb` while qadb loading is on (`qadb off` sends the
-verdicts to the log alone), and has its own timeout (`TWILIGHT_TIMEOUT`, 300 s). A sequence the
-automatic call missed (the actor was down for its last visit, the write failed) is judged by hand
-with `qa twilight <visit>`, which runs the judge alone, without the visit's QA.
+`start` and `status` say so), loads into `db.qadb` while qadb loading is on (with `qadb off` the
+verdict is still stored in the Butler, and reaches qadb only through a later `qa twilight`), and has
+its own timeout (`TWILIGHT_TIMEOUT`, 300 s: the judging takes seconds, the reload of the sequence's
+visits into qadb most of the rest). A sequence the automatic call missed (the actor was down for its
+last visit, the store or load failed, loading was off) is judged by hand with `qa twilight <visit>`,
+which runs the judge alone, without the visit's QA.
 
 ## MHS Interface
 

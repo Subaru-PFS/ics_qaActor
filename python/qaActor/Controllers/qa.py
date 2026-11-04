@@ -160,9 +160,9 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         if self.opdb_host is None:
             return "twilight: not judging sequences (the config has no db.opdb)"
         where = (
-            f"into qadb at {self.qadb['host']}:{self.qadb.get('port', 5436)}"
+            f"into the Butler and qadb at {self.qadb['host']}:{self.qadb.get('port', 5436)}"
             if self.qadb_load
-            else "to the log alone (qadb loading is off)"
+            else "into the Butler only (qadb loading is off: `qa twilight <visit>` loads it later)"
         )
         return (
             f"twilight: judging each visit's sequence with {self.twilight_path}, "
@@ -343,7 +343,8 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         """Build the twilight judge's command line for a visit; None when the config has no db.opdb.
 
         The judge decides for itself whether the visit's sequence is a twilight, and whether it is
-        complete; it writes to the same qadb the loader does while loading is on.
+        complete; it stores its verdict in the output collection, and loads it into the same qadb the
+        loader does while loading is on.
         """
         if self.opdb_host is None:
             return None
@@ -397,8 +398,9 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             self.logger.debug(f"{visit_id=} is not in a twilight sequence")
         elif returncode == TWILIGHT_NOT_WRITTEN:
             self.logger.warning(
-                f"twilight sequence of {visit_id=} judged but not written to qadb; the verdicts are in the"
-                f" log above, and `qa twilight {visit_id}` judges it again"
+                f"twilight sequence of {visit_id=} judged but not stored in the Butler or loaded into qadb;"
+                f" the judge's output above says which failed and holds the verdicts, and"
+                f" `qa twilight {visit_id}` judges it again"
             )
         else:
             self.logger.warning(f"twilight judge failed for {visit_id=} (returncode {returncode})")
