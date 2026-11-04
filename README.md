@@ -107,6 +107,26 @@ into `actorConfig`), as for the other actors' databases: `db.qadb` (`host` requi
 - The opdb fills qadb's visit rows (`pfs_visit`: description, design and `issued_at`, the QA
   dashboard's visit times, PIPE2D-1924); without `db.opdb` they have only the visit id.
 
+### Judging twilight sequences
+
+A twilight sky flat is judged against the other exposures of its IIC sequence, which one visit's
+QA cannot see (PIPE2D-1973). So after each visit's load the actor runs drp_qa's judge,
+`python $DRP_QA_DIR/bin.src/twilightQa.py -c <output> --sequence-of-visit <visit> --opdb-host <db.opdb.host> ...`
+(INSTRM-3089). The judge looks the visit's sequence up in the opdb and does nothing unless it is a
+twilight that has finished (`iic_sequence_status`) with a `twilightFiberFlux` stored for every visit
+and camera; the call after the sequence's last visit judges it, and writes one verdict per exposure
+and arm (`PASS`, `WARN`, `FAIL` or `TOO_FAINT`, with the reasons) and the measurements behind it to
+qadb's `twilight_qa` and `twilight_qa_metric` (`spt_qa_database` 0.3.0). Its exit status tells the
+actor what happened, and the actor logs it: judged, pending, not a twilight (quiet), or judged but
+not written to qadb, in which case the judge has printed the verdicts in full, so the actor log holds
+them.
+
+There is nothing to configure: the judge needs `db.opdb.host` (without it nothing is judged, and
+`start` and `status` say so), writes to `db.qadb` while qadb loading is on (`qadb off` sends the
+verdicts to the log alone), and has its own timeout (`TWILIGHT_TIMEOUT`, 300 s). A sequence the
+automatic call missed (the actor was down for its last visit, the write failed) is judged by hand
+with `qa twilight <visit>`, which runs the judge alone, without the visit's QA.
+
 ## MHS Interface
 
 ### Keys consumed
@@ -126,10 +146,11 @@ the key definitions come from `actorkeys/drp.py` even though the model is regist
 | Command              | Description                                                                                             |
 |----------------------|---------------------------------------------------------------------------------------------------------|
 | `ping`               | Returns the product name; used as a liveness check                                                      |
-| `status`             | Reports the visit being processed, the queue depth, and whether each visit is loaded into qadb          |
+| `status`             | Reports the visit being processed, the queue depth, whether each visit is loaded into qadb, and whether and where twilight sequences are judged |
 | `show`               | Dumps all key-value pairs from all subscribed MHS models                                                |
 | `process <visit_id>` | Manually enqueues a visit ID for QA processing (bypasses the automatic `reduceExposureStatus` listener) |
 | `qadb on\|off`       | Switches loading into qadb on or off from the next visit's load; fails if `on` has no `db.qadb`         |
+| `twilight <visit_id>` | Judges the visit's twilight sequence now, without re-running its QA (see *Judging twilight sequences*); fails without a `db.opdb` |
 
 `qadb on|off` lasts until the controller is rebuilt (an actor restart, or `disconnect`/`connect
 controller=qa`); `engine.qadb.load` applies again after that.
