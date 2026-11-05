@@ -120,9 +120,11 @@ image (`PASS`, `WARN`, `FAIL`, or `UNKNOWN` for the unjudged n arm, with the mea
 in the Butler as `twilightQaMetrics`, a new RUN prepended to the output collection, then loads the
 sequence's visits into qadb: `twilight_qa`, and `qa_gate`, where the sequence check is a third task
 beside `imageQualityQa` and `dmLineResiduals` (`spt_qa_database` 0.3.0). Its exit status tells the
-actor what happened, and the actor logs it: judged, pending, not a twilight (quiet), or judged but
-not stored or loaded, in which case the judge has printed the verdicts in full, so the actor log holds
-them.
+actor what happened, and the actor logs it: judged with every exposure `PASS` or `TOO_FAINT`, judged
+with a `WARN` or `FAIL` exposure (a WARNING, so it stands out in the log; the judge's output above it
+says which exposures and why), pending, not a twilight (quiet), or judged but not stored or loaded, in
+which case the judge has printed the verdicts in full, so the actor log holds them. There is no actor
+keyword or alert beyond the log yet.
 
 There is nothing to configure: the judge needs `db.opdb.host` (without it nothing is judged, and
 `start` and `status` say so), loads into `db.qadb` while qadb loading is on (with `qadb off` the

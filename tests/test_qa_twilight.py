@@ -12,6 +12,7 @@ import pytest
 
 from qaActor.Controllers.qa import (
     TWILIGHT_JUDGED,
+    TWILIGHT_JUDGED_BAD,
     TWILIGHT_NOT_TWILIGHT,
     TWILIGHT_NOT_WRITTEN,
     TWILIGHT_PENDING,
@@ -133,7 +134,16 @@ class TestJudgeTwilight:
         with caplog.at_level(logging.INFO):
             judging.judge_twilight(42)
         assert calls == [judging.twilight_cmd(42)]
-        assert "twilight sequence judged for visit_id=42" in caplog.text
+        assert "twilight sequence judged for visit_id=42: every exposure PASS or TOO_FAINT" in caplog.text
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_a_warn_or_fail_exposure_is_a_warning(self, judging, popens, caplog):  # noqa: F811
+        popens(TWILIGHT_JUDGED_BAD)
+        with caplog.at_level(logging.INFO):
+            judging.judge_twilight(42)
+        (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert "twilight sequence judged for visit_id=42: some exposure is WARN or FAIL" in warning.message
+        assert "the judge's output above" in warning.message
 
     def test_pending(self, judging, popens, caplog):  # noqa: F811
         popens(TWILIGHT_PENDING)
@@ -166,7 +176,14 @@ class TestJudgeTwilight:
         assert "Failed command: python /opt/drp_qa/bin.src/twilightQa.py" in caplog.text
 
     def test_the_exit_statuses_are_distinct(self):
-        assert len({TWILIGHT_JUDGED, TWILIGHT_PENDING, TWILIGHT_NOT_TWILIGHT, TWILIGHT_NOT_WRITTEN}) == 4
+        statuses = {
+            TWILIGHT_JUDGED,
+            TWILIGHT_PENDING,
+            TWILIGHT_NOT_TWILIGHT,
+            TWILIGHT_NOT_WRITTEN,
+            TWILIGHT_JUDGED_BAD,
+        }
+        assert len(statuses) == 5
         assert TWILIGHT_JUDGED == 0
 
     def test_the_judges_output_is_relayed_to_the_log(self, judging, fakePopen, caplog):  # noqa: F811

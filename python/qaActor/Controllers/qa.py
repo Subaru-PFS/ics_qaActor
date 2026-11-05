@@ -31,6 +31,7 @@ TWILIGHT_JUDGED = 0
 TWILIGHT_PENDING = 3
 TWILIGHT_NOT_TWILIGHT = 4
 TWILIGHT_NOT_WRITTEN = 5
+TWILIGHT_JUDGED_BAD = 6
 
 
 @dataclass(frozen=True)
@@ -372,8 +373,9 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         """Judge a visit's twilight sequence if it is complete, and log what happened.
 
         Nothing happens until the sequence's last visit has been through QA: the call after that one
-        judges it. The judge's exit status says which it was (`TWILIGHT_JUDGED`, ...); on a failed
-        qadb write it has printed the verdicts in full, so they are in the log above the warning.
+        judges it. The judge's exit status says which it was (`TWILIGHT_JUDGED`, ...): a sequence with a
+        WARN or FAIL exposure is logged at WARNING, so it stands out in the log; on a failed qadb write
+        it has printed the verdicts in full, so they are in the log above the warning.
         """
         cmd = self.twilight_cmd(visit_id)
         if cmd is None:
@@ -389,7 +391,12 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             )
             self.logger.warning(f"Timed out command: {' '.join(cmd)}")
         elif returncode == TWILIGHT_JUDGED:
-            self.logger.info(f"twilight sequence judged for {visit_id=}")
+            self.logger.info(f"twilight sequence judged for {visit_id=}: every exposure PASS or TOO_FAINT")
+        elif returncode == TWILIGHT_JUDGED_BAD:
+            self.logger.warning(
+                f"twilight sequence judged for {visit_id=}: some exposure is WARN or FAIL;"
+                " the judge's output above says which, and why"
+            )
         elif returncode == TWILIGHT_PENDING:
             self.logger.info(
                 f"twilight sequence of {visit_id=} not complete yet; the judge's output says why"
