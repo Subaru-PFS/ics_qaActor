@@ -169,6 +169,9 @@ class TestLoadCmd:
             "--user", "pfs",
             "--dbname", "qadb",
             "--opdb-host", "db-ics",
+            "--opdb-port", "5432",
+            "--opdb-user", "pfs",
+            "--opdb-dbname", "opdb",
         ]  # fmt: skip
 
     def test_loads_the_collection_the_pipeline_writes(self, loading):

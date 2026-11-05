@@ -94,7 +94,8 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         load = cfg.get("qadb") or {}
         databases = actor.actorConfig.get("db") or {}
         self.qadb = databases.get("qadb") or None
-        self.opdb_host = (databases.get("opdb") or {}).get("host")
+        self.opdb = databases.get("opdb") or None
+        self.opdb_host = (self.opdb or {}).get("host")
         self.loader_path = os.path.expandvars(load.get("loader", DEFAULT_LOADER))
         self.load_timeout = load.get("timeout", DEFAULT_LOAD_TIMEOUT)
         self.qadb_load = False
@@ -167,8 +168,24 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         )
         return (
             f"twilight: judging each visit's sequence with {self.twilight_path}, "
-            f"opdb {self.opdb_host}, verdicts {where}"
+            f"opdb {self.opdb_host}:{self.opdb.get('port', 5432)} as {self.opdb.get('user', 'public_user')}, "
+            f"verdicts {where}"
         )
+
+    def opdb_args(self):
+        """Return the opdb options the loader and the judge take, from the config's `db.opdb`.
+
+        Both scripts default a missing key the same way (5432, `public_user`, `opdb`); the actor
+        spells them out so the logged command is complete.
+        """
+        # fmt: off
+        return [
+            "--opdb-host", f"{self.opdb_host}",
+            "--opdb-port", f"{self.opdb.get('port', 5432)}",
+            "--opdb-user", f"{self.opdb.get('user', 'public_user')}",
+            "--opdb-dbname", f"{self.opdb.get('dbname', 'opdb')}",
+        ]
+        # fmt: on
 
     @property
     def current_visit(self):
@@ -313,7 +330,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         # fmt: on
         # The opdb fills qadb's pfs_visit (description, design, issued_at: the dashboard's visit times).
         if self.opdb_host:
-            cmd += ["--opdb-host", f"{self.opdb_host}"]
+            cmd += self.opdb_args()
         return cmd
 
     def load_qadb(self, visit_id):
@@ -355,7 +372,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             "-b", self.datastore,
             "-c", self.output_collection,
             "--sequence-of-visit", f"{visit_id}",
-            "--opdb-host", f"{self.opdb_host}",
+            *self.opdb_args(),
         ]
         # fmt: on
         if self.qadb_load:
