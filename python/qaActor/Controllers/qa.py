@@ -4,6 +4,7 @@ import queue
 import re
 import subprocess
 import threading
+from dataclasses import dataclass
 
 #: A `$VAR` or `${VAR}` that `os.path.expandvars` left behind, meaning it was unset.
 UNEXPANDED_VAR = re.compile(r"\$\{?\w+")
@@ -17,6 +18,27 @@ DEFAULT_LOAD_TIMEOUT = 300
 
 #: drp_qa's loader, which copies a visit's QA tables from the Butler into qadb (PIPE2D-1385).
 DEFAULT_LOADER = "$DRP_QA_DIR/bin.src/loadQadb.py"
+
+#: drp_qa's twilight judge: judges a visit's IIC sequence once it is a finished twilight with every visit's
+#: tables stored, and writes the verdicts to qadb (PIPE2D-1973, INSTRM-3089).
+TWILIGHT_JUDGE = "$DRP_QA_DIR/bin.src/twilightQa.py"
+
+#: Seconds a twilight judgement may take before it is killed: a sequence is a handful of visits' tables.
+TWILIGHT_TIMEOUT = 300
+
+#: twilightQa.py's exit statuses (its module docstring): what happened to the visit's sequence.
+TWILIGHT_JUDGED = 0
+TWILIGHT_PENDING = 3
+TWILIGHT_NOT_TWILIGHT = 4
+TWILIGHT_NOT_WRITTEN = 5
+TWILIGHT_JUDGED_BAD = 6
+
+
+@dataclass(frozen=True)
+class TwilightCheck:
+    """A queue item asking for a visit's twilight judgement alone, without its QA: `qa twilight <visit>`."""
+
+    visit: int
 
 
 class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController
@@ -85,6 +107,20 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
                 if "load" in load or self.qadb is not None:
                     raise
 
+        # INSTRM-3089: after each visit's load, drp_qa's twilightQa.py judges the visit's IIC sequence if it
+        # is a twilight that has finished with every visit's tables stored, and writes the verdicts to
+        # db.qadb while loading is on (to its log alone otherwise). It finds the sequence in the opdb, so
+        # without a db.opdb nothing is judged. The path is checked like the pipeline's, for the same reason,
+        # but only when it will be used.
+        self.twilight_path = os.path.expandvars(TWILIGHT_JUDGE)
+        unexpanded = UNEXPANDED_VAR.search(self.twilight_path)
+        if unexpanded and self.opdb_host is not None:
+            raise RuntimeError(
+                f"twilight judge path {self.twilight_path!r} still contains {unexpanded.group()!r} "
+                f"after expansion — is DRP_QA_DIR set in the actor's environment?"
+            )
+        self.twilight_timeout = TWILIGHT_TIMEOUT
+
         self.processing_queue = queue.Queue()
 
         self._current_visit = None
@@ -120,6 +156,20 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             return "qadb: not loading (the config has no db.qadb)"
         return "qadb: not loading (switched off)"
 
+    def describe_twilight(self):
+        """One line on whether, and where, each visit's twilight sequence is judged."""
+        if self.opdb_host is None:
+            return "twilight: not judging sequences (the config has no db.opdb)"
+        where = (
+            f"into the Butler and qadb at {self.qadb['host']}:{self.qadb.get('port', 5436)}"
+            if self.qadb_load
+            else "into the Butler only (qadb loading is off: `qa twilight <visit>` loads it later)"
+        )
+        return (
+            f"twilight: judging each visit's sequence with {self.twilight_path}, "
+            f"opdb {self.opdb_host}, verdicts {where}"
+        )
+
     @property
     def current_visit(self):
         """The visit being processed right now, or None if the loop is idle."""
@@ -133,6 +183,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         self.logger.info(f"Input collections: {self.input_collections}")
         self.logger.info(f"Output collection: {self.output_collection}")
         self.logger.info(self.describe_qadb_load())
+        self.logger.info(self.describe_twilight())
 
         super().start()
 
@@ -160,20 +211,27 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         while True:
             self.logger.info("Waiting for visits on the QA processing queue")
             # Blocks until a visit is enqueued.
-            visit_id = self.processing_queue.get()
+            item = self.processing_queue.get()
 
             # `stop` enqueues None as the shutdown sentinel.
-            if visit_id is None:
+            if item is None:
                 self.logger.info("Received the stop sentinel, exiting QA processing loop")
                 break
 
+            visit_id = item.visit if isinstance(item, TwilightCheck) else item
             try:
                 self._current_visit = visit_id
+                if isinstance(item, TwilightCheck):
+                    self.logger.info(f"Judging the twilight sequence of visit {visit_id} alone (qa twilight)")
+                    self.judge_twilight(visit_id)
+                    continue
                 self.logger.info(f"Processing visit: {visit_id}")
                 self.run_pipetask(visit_id)
                 # Even after a failed or killed pipetask: the images it did judge are in the
                 # Butler, and the loader loads what it finds.
                 self.load_qadb(visit_id)
+                # Likewise: the judge says what a sequence is still waiting for.
+                self.judge_twilight(visit_id)
             except Exception as e:
                 self.logger.warning(f"Error processing {visit_id=}: {e}")
             finally:
@@ -282,6 +340,79 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         else:
             self.logger.info(f"qadb loaded for {visit_id=}")
 
+    def twilight_cmd(self, visit_id):
+        """Build the twilight judge's command line for a visit; None when the config has no db.opdb.
+
+        The judge decides for itself whether the visit's sequence is a twilight, and whether it is
+        complete; it stores its verdict in the output collection, and loads it into the same qadb the
+        loader does while loading is on.
+        """
+        if self.opdb_host is None:
+            return None
+        # fmt: off
+        cmd = [
+            "python", self.twilight_path,
+            "-b", self.datastore,
+            "-c", self.output_collection,
+            "--sequence-of-visit", f"{visit_id}",
+            "--opdb-host", f"{self.opdb_host}",
+        ]
+        # fmt: on
+        if self.qadb_load:
+            # fmt: off
+            cmd += [
+                "--qadb-host", f"{self.qadb['host']}",
+                "--qadb-port", f"{self.qadb.get('port', 5436)}",
+                "--qadb-user", f"{self.qadb.get('user', 'pfs')}",
+                "--qadb-dbname", f"{self.qadb.get('dbname', 'qadb')}",
+            ]
+            # fmt: on
+        return cmd
+
+    def judge_twilight(self, visit_id):
+        """Judge a visit's twilight sequence if it is complete, and log what happened.
+
+        Nothing happens until the sequence's last visit has been through QA: the call after that one
+        judges it. The judge's exit status says which it was (`TWILIGHT_JUDGED`, ...): a sequence with a
+        WARN or FAIL exposure is logged at WARNING, so it stands out in the log; on a failed qadb write
+        it has printed the verdicts in full, so they are in the log above the warning.
+        """
+        cmd = self.twilight_cmd(visit_id)
+        if cmd is None:
+            return
+
+        def watchdog(process, visit_id, timed_out):
+            return self._start_watchdog(process, visit_id, timed_out, self.twilight_timeout, "twilight judge")
+
+        returncode, timed_out = self._run_streamed(cmd, visit_id, watchdog)
+        if timed_out and returncode != 0:
+            self.logger.warning(
+                f"twilight judge timed out for {visit_id=} after {self.twilight_timeout}s, killed"
+            )
+            self.logger.warning(f"Timed out command: {' '.join(cmd)}")
+        elif returncode == TWILIGHT_JUDGED:
+            self.logger.info(f"twilight sequence judged for {visit_id=}: every exposure PASS or TOO_FAINT")
+        elif returncode == TWILIGHT_JUDGED_BAD:
+            self.logger.warning(
+                f"twilight sequence judged for {visit_id=}: some exposure is WARN or FAIL;"
+                " the judge's output above says which, and why"
+            )
+        elif returncode == TWILIGHT_PENDING:
+            self.logger.info(
+                f"twilight sequence of {visit_id=} not complete yet; the judge's output says why"
+            )
+        elif returncode == TWILIGHT_NOT_TWILIGHT:
+            self.logger.debug(f"{visit_id=} is not in a twilight sequence")
+        elif returncode == TWILIGHT_NOT_WRITTEN:
+            self.logger.warning(
+                f"twilight sequence of {visit_id=} judged but not stored in the Butler or loaded into qadb;"
+                f" the judge's output above says which failed and holds the verdicts, and"
+                f" `qa twilight {visit_id}` judges it again"
+            )
+        else:
+            self.logger.warning(f"twilight judge failed for {visit_id=} (returncode {returncode})")
+            self.logger.warning(f"Failed command: {' '.join(cmd)}")
+
     def _run_streamed(self, cmd, visit_id, start_watchdog):
         """Run `cmd`, relaying its output to the log, under a watchdog.
 
@@ -356,6 +487,10 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             The visit identifier to add to the QA processing queue.
         """
         self.processing_queue.put(visit_id)
+
+    def enqueue_twilight(self, visit_id):
+        """Enqueue a visit's twilight judgement alone (`qa twilight <visit>`), behind the visits queued."""
+        self.processing_queue.put(TwilightCheck(int(visit_id)))
 
     def queue_size(self):
         """Return the current number of visits waiting in the queue."""

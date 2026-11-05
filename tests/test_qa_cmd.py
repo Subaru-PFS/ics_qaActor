@@ -39,6 +39,7 @@ class TestWiring:
             ("show", ""),
             ("process", "<visit_id>"),
             ("qadb", "@(on|off)"),
+            ("twilight", "<visit_id>"),
         ]
 
     def test_qadb_parses_on_and_off_and_nothing_else(self, qaCmd):
@@ -87,6 +88,7 @@ class TestStatus:
             'text="QA currently processing: idle"',
             'text="QA processing queue size: 0"',
             'text="qadb: not loading (the config has no db.qadb)"',
+            'text="twilight: not judging sequences (the config has no db.opdb)"',
         ]
         assert cmd.finished
 
@@ -107,6 +109,7 @@ class TestStatus:
             'text="QA currently processing: 12345"',
             'text="QA processing queue size: 0"',
             'text="qadb: not loading (the config has no db.qadb)"',
+            'text="twilight: not judging sequences (the config has no db.opdb)"',
         ]
         assert cmd.finished
 
@@ -122,6 +125,7 @@ class TestStatus:
             'text="QA currently processing: 12345"',
             'text="QA processing queue size: 1"',
             'text="qadb: not loading (the config has no db.qadb)"',
+            'text="twilight: not judging sequences (the config has no db.opdb)"',
         ]
 
 
@@ -271,7 +275,7 @@ class TestQadb:
     def test_status_reports_the_switch(self, loadingCmd, cmd):
         loadingCmd._get_controller().set_qadb_load(False)
         loadingCmd.status(cmd)
-        assert cmd.informs[-1] == 'text="qadb: not loading (switched off)"'
+        assert cmd.informs[-2] == 'text="qadb: not loading (switched off)"'
 
     def test_on_without_a_db_qadb_fails_the_command(self, qaCmd, controller):
         cmd = KeywordCmd(on=None)
@@ -284,3 +288,36 @@ class TestQadb:
         cmd = KeywordCmd(off=None)
         qaCmd.qadb(cmd)
         assert cmd.fails == [] and cmd.finished
+
+
+class TestTwilight:
+    @pytest.fixture
+    def judgingCmd(self, actorConfig, logger, drpQaDir):
+        from qaActor.Controllers.qa import qa
+
+        from .conftest import FakeActor
+
+        actorConfig["db"] = {"opdb": {"host": "db-ics"}, "qadb": {"host": "qadb-host"}}
+        actor = FakeActor(actorConfig, logger)
+        actor.controllers["qa"] = qa(actor, "qa")
+        return QaCmd(actor)
+
+    def test_enqueues_the_judgement_alone(self, judgingCmd):
+        from qaActor.Controllers.qa import TwilightCheck
+
+        cmd = KeywordCmd(visit_id=types.Int()("150844"))
+        judgingCmd.twilight(cmd)
+        item = judgingCmd._get_controller().processing_queue.get_nowait()
+        assert item == TwilightCheck(150844) and type(item.visit) is int
+        assert cmd.finishes == ['text="Enqueued the twilight judgement of visit_id=150844"']
+
+    def test_status_says_where_it_judges(self, judgingCmd, cmd):
+        judgingCmd.status(cmd)
+        assert cmd.informs[-1].startswith("text=\"twilight: judging each visit's sequence with")
+
+    def test_without_a_db_opdb_the_command_fails(self, qaCmd, controller):
+        cmd = KeywordCmd(visit_id=150844)
+        qaCmd.twilight(cmd)
+        assert cmd.finishes == [] and controller.queue_size() == 0
+        (failure,) = cmd.fails
+        assert failure == 'text="cannot judge twilight sequences: the config has no db.opdb (actors.yaml)"'

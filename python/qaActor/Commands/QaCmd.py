@@ -14,6 +14,7 @@ class QaCmd:
             ("show", "", self.show),
             ("process", "<visit_id>", self.process_visit),
             ("qadb", "@(on|off)", self.qadb),
+            ("twilight", "<visit_id>", self.twilight),
         ]
         self.keys = keys.KeysDictionary(
             "qa_qa",
@@ -42,6 +43,7 @@ class QaCmd:
 
         cmd.inform(f'text="QA processing queue size: {controller.queue_size()}"')
         cmd.inform(f"text={qstr(controller.describe_qadb_load())}")
+        cmd.inform(f"text={qstr(controller.describe_twilight())}")
         cmd.finish()
 
     def show(self, cmd):
@@ -90,3 +92,20 @@ class QaCmd:
         message = self._get_controller().describe_qadb_load()
         self.actor.logger.info(message)
         cmd.finish(f"text={qstr(message)}")
+
+    def twilight(self, cmd):
+        """Judge a visit's twilight sequence now, without re-running its QA.
+
+        For a sequence the automatic call missed: the actor was down for its last visit, that visit's
+        reduction was never reported, its status row came late, or the qadb write failed. The judge
+        still checks that the sequence is a finished twilight with every visit's tables stored.
+        """
+        visit_id = int(cmd.cmd.keywords["visit_id"].values[0])
+        controller = self._get_controller()
+        if controller.twilight_cmd(visit_id) is None:
+            message = "cannot judge twilight sequences: the config has no db.opdb (actors.yaml)"
+            cmd.fail(f"text={qstr(message)}")
+            return
+        self.actor.logger.info(f"Manually enqueuing the twilight judgement of {visit_id=}")
+        controller.enqueue_twilight(visit_id)
+        cmd.finish(f'text="Enqueued the twilight judgement of {visit_id=}"')
