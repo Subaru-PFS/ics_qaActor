@@ -65,8 +65,8 @@ class TestConfig:
         with caplog.at_level(logging.INFO):
             judging.start()
         assert (
-            "twilight: judging each visit's sequence with /opt/drp_qa/bin.src/twilightQa.py, opdb db-ics,"
-            " verdicts into the Butler and qadb at qadb-host:5436" in caplog.text
+            "twilight: judging each visit's sequence with /opt/drp_qa/bin.src/twilightQa.py,"
+            " opdb db-ics:5432 as pfs, verdicts into the Butler and qadb at qadb-host:5436" in caplog.text
         )
 
     def test_start_says_when_the_verdicts_go_to_the_log_alone(self, judging, caplog):
@@ -91,6 +91,9 @@ class TestTwilightCmd:
             "-c", "qaActor/reductions",
             "--sequence-of-visit", "42",
             "--opdb-host", "db-ics",
+            "--opdb-port", "5432",
+            "--opdb-user", "pfs",
+            "--opdb-dbname", "opdb",
             "--qadb-host", "qadb-host",
             "--qadb-port", "5436",
             "--qadb-user", "pfs",
@@ -105,10 +108,33 @@ class TestTwilightCmd:
         judging.set_qadb_load(False)
         cmd = judging.twilight_cmd(42)
         assert "--qadb-host" not in cmd
-        assert cmd[-2:] == ["--opdb-host", "db-ics"]
+        assert cmd[-8:] == [
+            "--opdb-host", "db-ics", "--opdb-port", "5432", "--opdb-user", "pfs", "--opdb-dbname", "opdb",
+        ]  # fmt: skip
         # Negative control: switched back on, the qadb returns.
         judging.set_qadb_load(True)
         assert "--qadb-host" in judging.twilight_cmd(42)
+
+    def test_the_opdb_account_follows_the_config(self, sharedConfig, logger, drpQaDir):  # noqa: F811
+        sharedConfig["db"]["opdb"] = {
+            "host": "pfsa-db", "port": 5433, "user": "reader", "dbname": "opdb_copy",
+        }  # fmt: skip
+        judging = qa(FakeActor(sharedConfig, logger), "qa")
+        cmd = judging.twilight_cmd(42)
+        assert cmd[cmd.index("--opdb-user") + 1] == "reader"
+        assert cmd[cmd.index("--opdb-port") + 1] == "5433"
+        assert cmd[cmd.index("--opdb-dbname") + 1] == "opdb_copy"
+        assert "opdb pfsa-db:5433 as reader" in judging.describe_twilight()
+        # The loader gets the same account.
+        assert judging.load_cmd(42)[-8:] == cmd[cmd.index("--opdb-host") : cmd.index("--opdb-host") + 8]
+
+    def test_a_host_alone_takes_the_scripts_defaults(self, sharedConfig, logger, drpQaDir):  # noqa: F811
+        sharedConfig["db"]["opdb"] = {"host": "pfsa-db"}
+        cmd = qa(FakeActor(sharedConfig, logger), "qa").twilight_cmd(42)
+        assert cmd[cmd.index("--opdb-host"):cmd.index("--opdb-host") + 8] == [
+            "--opdb-host", "pfsa-db", "--opdb-port", "5432",
+            "--opdb-user", "public_user", "--opdb-dbname", "opdb",
+        ]  # fmt: skip
 
     def test_without_a_db_qadb_the_qadb_is_left_out(self, sharedConfig, logger, drpQaDir):  # noqa: F811
         del sharedConfig["db"]["qadb"]

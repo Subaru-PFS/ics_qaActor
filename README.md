@@ -86,7 +86,9 @@ whether it is loading. `qa qadb on|off` switches it while the actor runs (see *C
 
 Where to connect comes from the shared actor config (`pfs_instdata/config/actors/actors.yaml`, merged
 into `actorConfig`), as for the other actors' databases: `db.qadb` (`host` required; `port`, `user`,
-`dbname` default to 5436, `pfs`, `qadb`) and `db.opdb.host`. Only the switch and its options are in
+`dbname` default to 5436, `pfs`, `qadb`) and `db.opdb` (`host` required; `port`, `user`, `dbname`
+default to 5432, `public_user`, `opdb`). Both blocks are passed whole to drp_qa's scripts. Only the
+switch and its options are in
 `qa.yaml`:
 
 ```yaml
@@ -103,7 +105,8 @@ into `actorConfig`), as for the other actors' databases: `db.qadb` (`host` requi
   so a visit processed again is replaced, not duplicated.
 - A failed load is logged and the loop carries on; the Butler stays the record, and the logged
   command loads the visit again by hand.
-- The password comes from the actor user's `~/.pgpass`; the opdb is read as `public_user`.
+- The passwords come from the actor user's `~/.pgpass`: one line for `db.qadb`'s account, one for
+  `db.opdb`'s (`public_user` by default; reading suffices).
 - The opdb fills qadb's visit rows (`pfs_visit`: description, design and `issued_at`, the QA
   dashboard's visit times, PIPE2D-1924); without `db.opdb` they have only the visit id.
 
@@ -111,7 +114,7 @@ into `actorConfig`), as for the other actors' databases: `db.qadb` (`host` requi
 
 A twilight sky flat is judged against the other exposures of its IIC sequence, which one visit's
 QA cannot see (PIPE2D-1973). So after each visit's load the actor runs drp_qa's judge,
-`python $DRP_QA_DIR/bin.src/twilightQa.py -c <output> --sequence-of-visit <visit> --opdb-host <db.opdb.host> ...`
+`python $DRP_QA_DIR/bin.src/twilightQa.py -c <output> --sequence-of-visit <visit> --opdb-host <db.opdb.host> --opdb-user ... `
 (INSTRM-3089). The judge looks the visit's sequence up in the opdb and does nothing unless it is a
 twilight that has finished (`iic_sequence_status`) with a `twilightFiberFlux` stored for every visit
 and camera; the call after the sequence's last visit judges it. It prints one verdict per exposure
@@ -126,7 +129,7 @@ says which exposures and why), pending, not a twilight (quiet), or judged but no
 which case the judge has printed the verdicts in full, so the actor log holds them. There is no actor
 keyword or alert beyond the log yet.
 
-There is nothing to configure: the judge needs `db.opdb.host` (without it nothing is judged, and
+There is nothing to configure: the judge needs `db.opdb` (without it nothing is judged, and
 `start` and `status` say so), loads into `db.qadb` while qadb loading is on (with `qadb off` the
 verdict is still stored in the Butler, and reaches qadb only through a later `qa twilight`), and has
 its own timeout (`TWILIGHT_TIMEOUT`, 300 s: the judging takes seconds, the reload of the sequence's
