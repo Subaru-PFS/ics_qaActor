@@ -26,6 +26,13 @@ from .test_qa_controller import fakePopen  # noqa: F401 — fixture
 from .test_qa_qadb import loading, popens, sharedConfig  # noqa: F401 — fixtures
 
 
+def step(cmd):
+    """Name a subprocess call: pipetask, the chain module, or the drp_qa script's file name."""
+    if cmd[0] != "python":
+        return cmd[0]
+    return cmd[2] if cmd[1] == "-m" else cmd[1].rsplit("/", 1)[-1]
+
+
 @pytest.fixture
 def judging(loading):  # noqa: F811
     """A controller with an opdb and qadb loading on: judging into qadb."""
@@ -237,28 +244,28 @@ class TestRunLoop:
         judging.enqueue_visit(2)
         judging.stop()
         judging.run()
-        assert [cmd[1].rsplit("/", 1)[-1] if cmd[0] == "python" else cmd[0] for cmd in calls] == [
-            "pipetask", "loadQadb.py", "twilightQa.py",
-            "pipetask", "loadQadb.py", "twilightQa.py",
+        assert [step(cmd) for cmd in calls] == [
+            "pipetask", "qaActor.chain", "loadQadb.py", "twilightQa.py",
+            "pipetask", "qaActor.chain", "loadQadb.py", "twilightQa.py",
         ]  # fmt: skip
-        assert [cmd[cmd.index("--sequence-of-visit") + 1] for cmd in calls[2::3]] == ["1", "2"]
+        assert [cmd[cmd.index("--sequence-of-visit") + 1] for cmd in calls[3::4]] == ["1", "2"]
 
     def test_a_failed_pipetask_and_load_are_still_judged(self, judging, popens):  # noqa: F811
         # The judge says what the sequence is waiting for, and a complete one is judged anyway.
-        calls = popens(3, 1, TWILIGHT_PENDING)
+        calls = popens(3, 0, 1, TWILIGHT_PENDING)
         judging.enqueue_visit(1)
         judging.stop()
         judging.run()
-        assert len(calls) == 3 and calls[2][1].endswith("twilightQa.py")
+        assert len(calls) == 4 and calls[3][1].endswith("twilightQa.py")
 
     def test_a_failed_judge_does_not_stop_the_loop(self, judging, popens, caplog):  # noqa: F811
-        calls = popens(0, 0, 1, 0, 0, 0)
+        calls = popens(0, 0, 0, 1, 0, 0, 0, 0)
         judging.enqueue_visit(1)
         judging.enqueue_visit(2)
         judging.stop()
         with caplog.at_level(logging.INFO):
             judging.run()
-        assert len(calls) == 6
+        assert len(calls) == 8
         assert "twilight judge failed for visit_id=1" in caplog.text
         assert "twilight sequence judged for visit_id=2" in caplog.text
 
@@ -271,14 +278,14 @@ class TestRunLoop:
         assert judging.current_visit is None
 
     def test_a_twilight_check_queues_behind_visits(self, judging, popens):  # noqa: F811
-        calls = popens(0, 0, 0, 0)
+        calls = popens(0, 0, 0, 0, 0)
         judging.enqueue_visit(1)
         judging.enqueue_twilight(2)
         judging.stop()
         judging.run()
         judged = [cmd[cmd.index("--sequence-of-visit") + 1] for cmd in calls if "--sequence-of-visit" in cmd]
         assert judged == ["1", "2"]
-        assert len(calls) == 4
+        assert len(calls) == 5
 
     def test_the_check_holds_a_plain_int(self, judging):
         judging.enqueue_twilight("42")
@@ -290,4 +297,4 @@ class TestRunLoop:
         controller.enqueue_visit(1)
         controller.stop()
         controller.run()
-        assert [cmd[0] for cmd in calls] == ["pipetask"]
+        assert [step(cmd) for cmd in calls] == ["pipetask", "qaActor.chain"]

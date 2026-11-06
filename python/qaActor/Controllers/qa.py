@@ -5,6 +5,7 @@ import re
 import subprocess
 import threading
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 #: A `$VAR` or `${VAR}` that `os.path.expandvars` left behind, meaning it was unset.
 UNEXPANDED_VAR = re.compile(r"\$\{?\w+")
@@ -15,6 +16,13 @@ DEFAULT_TIMEOUT = 600
 
 #: Seconds a qadb load may take before it is killed. Overridable as `engine.qadb.timeout`.
 DEFAULT_LOAD_TIMEOUT = 300
+
+#: The module that owns the output chain (`qaActor.chain`), run with the stack's python like the loader:
+#: at start, and after each visit's pipetask to prepend the RUN it wrote (INSTRM-3096).
+CHAIN_MODULE = "qaActor.chain"
+
+#: Seconds defining the chain may take: a Butler import and one registry transaction.
+CHAIN_TIMEOUT = 120
 
 #: drp_qa's loader, which copies a visit's QA tables from the Butler into qadb (PIPE2D-1385).
 DEFAULT_LOADER = "$DRP_QA_DIR/bin.src/loadQadb.py"
@@ -39,6 +47,11 @@ class TwilightCheck:
     """A queue item asking for a visit's twilight judgement alone, without its QA: `qa twilight <visit>`."""
 
     visit: int
+
+
+@dataclass(frozen=True)
+class DefineChain:
+    """A queue item asking for the output chain to be defined (or repaired): put first at start."""
 
 
 class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController
@@ -69,6 +82,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         self.input_collections = cfg["butler"]["input"]
         if isinstance(self.input_collections, list):
             self.input_collections = ",".join(self.input_collections)
+        self.chain_timeout = CHAIN_TIMEOUT
 
         self.output_collection = cfg["butler"]["output"]
         self.pipeline_path = os.path.expandvars(cfg["pipeline"])
@@ -157,6 +171,14 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             return "qadb: not loading (the config has no db.qadb)"
         return "qadb: not loading (switched off)"
 
+    def describe_chain(self):
+        """One line on the output chain and who maintains it."""
+        return (
+            f"output: {self.output_collection} = this actor's RUNs, newest first,"
+            f" then {self.input_collections} as chained members"
+            f" (python -m {CHAIN_MODULE}; pipetask writes a RUN per visit)"
+        )
+
     def describe_twilight(self):
         """One line on whether, and where, each visit's twilight sequence is judged."""
         if self.opdb_host is None:
@@ -198,10 +220,17 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         self.logger.info(f"Pipeline path: {self.pipeline_path}")
         self.logger.info(f"Datastore: {self.datastore}")
         self.logger.info(f"Input collections: {self.input_collections}")
-        self.logger.info(f"Output collection: {self.output_collection}")
+        self.logger.info(self.describe_chain())
         self.logger.info(self.describe_qadb_load())
         self.logger.info(self.describe_twilight())
 
+        # First thing the loop does: define (or repair) the chain, so the loader and the judge see
+        # this actor's RUNs behind the current inputs from the first visit on. At the head of the
+        # queue, ahead of any visit the drp model enqueued before the controller started.
+        with self.processing_queue.mutex:
+            self.processing_queue.queue.appendleft(DefineChain())
+            self.processing_queue.unfinished_tasks += 1
+            self.processing_queue.not_empty.notify()
         super().start()
 
         if cmd:
@@ -235,6 +264,12 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
                 self.logger.info("Received the stop sentinel, exiting QA processing loop")
                 break
 
+            if isinstance(item, DefineChain):
+                try:
+                    self.define_chain()
+                except Exception as e:
+                    self.logger.warning(f"Error defining the output chain: {e}")
+                continue
             visit_id = item.visit if isinstance(item, TwilightCheck) else item
             try:
                 self._current_visit = visit_id
@@ -254,8 +289,24 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             finally:
                 self._current_visit = None
 
-    def pipetask_cmd(self, visit_id):
-        """Build the pipetask command line for a single visit."""
+    def new_run(self, visit_id):
+        """Name the RUN for one visit's pipetask: the output collection, slash, the UTC time and the visit.
+
+        The visit keeps two visits processed within the same second apart (a quick failure, then the
+        next): a RUN is one visit's output, and the chain step must not merge them.
+        """
+        return f"{self.output_collection}/{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{visit_id}"
+
+    def pipetask_cmd(self, visit_id, run=None):
+        """Build the pipetask command line for a single visit, writing into `run` (default: a new one).
+
+        The inputs are given as `-i` with `--output-run` and no `-o`: pipetask then resolves the
+        inputs when it runs, so a RUN drpActor prepended to drpActor/reductions since the last visit
+        is found. With `-o` it would instead search the output chain as stored, a flattened snapshot
+        of the inputs it wrote at the last successful run, and find nothing newer (INSTRM-3096);
+        `qaActor.chain` keeps the output chain instead (`define_chain`).
+        """
+        run = run or self.new_run(visit_id)
         # fmt: off
         return [
             "pipetask",
@@ -265,16 +316,54 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             "-j", f"{self.num_procs}",
             "-b", self.datastore,
             "-i", self.input_collections,
-            "-o", self.output_collection,
-            # The output chain stores the inputs flattened as they were at its first run, and
-            # drpActor prepends a new run to drpActor/reductions with each new reduction pipeline:
-            # without --rebase every later visit fails pipetask's consistency check, and with the
-            # check passing it would read the stale snapshot instead of the current inputs.
-            "--rebase",
+            "--output-run", run,
             "-p", self.pipeline_path,
             "-d", f"visit = {visit_id}"
         ]
         # fmt: on
+
+    def chain_cmd(self, run=None):
+        """Build the command defining the output chain, prepending `run` when given.
+
+        `python` is the one on PATH, as `pipetask` is: the stack's, which has the Butler; it finds
+        `qaActor.chain` because EUPS puts this product's python/ on PYTHONPATH.
+        """
+        # fmt: off
+        cmd = [
+            "python", "-m", CHAIN_MODULE,
+            "-b", self.datastore,
+            "-c", self.output_collection,
+            "-i", self.input_collections,
+        ]
+        # fmt: on
+        if run is not None:
+            cmd += ["--run", run]
+        return cmd
+
+    def define_chain(self, run=None, visit_id=None):
+        """Define the output chain, prepending `run` when given, and log the outcome.
+
+        Return whether it succeeded. A failure leaves the visit's QA in its RUN but out of the chain,
+        where the loader and the judge do not see it; the logged command puts it there by hand.
+        """
+        cmd = self.chain_cmd(run)
+
+        def watchdog(process, visit_id, timed_out):
+            return self._start_watchdog(process, visit_id, timed_out, self.chain_timeout, "output chain")
+
+        returncode, timed_out = self._run_streamed(cmd, visit_id, watchdog)
+        # As in `run_pipetask`: a zero return code means it finished, whatever the watchdog says.
+        if returncode == 0:
+            return True
+        where = (
+            f"{run} is not in {self.output_collection}" if run else f"{self.output_collection} is not defined"
+        )
+        self.logger.warning(
+            f"output chain {'timed out' if timed_out else f'failed (returncode {returncode})'}:"
+            f" {where}, so the loader and the judge do not see its QA until this is rerun"
+        )
+        self.logger.warning(f"Failed command: {' '.join(cmd)}")
+        return False
 
     def run_pipetask(self, visit_id):
         """Run the QA pipeline for a single visit, relaying pipetask output to the log.
@@ -293,7 +382,8 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         - Logs warnings if the pipeline fails (non-zero return code)
         - Logs a success message when the pipeline completes successfully
         """
-        cmd = self.pipetask_cmd(visit_id)
+        run = self.new_run(visit_id)
+        cmd = self.pipetask_cmd(visit_id, run)
         returncode, timed_out = self._run_streamed(cmd, visit_id, self._start_watchdog)
 
         # `and returncode` guards the narrow race where the watchdog fires just
@@ -307,6 +397,9 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             self.logger.warning(f"Failed command: {' '.join(cmd)}")
         else:
             self.logger.info(f"QA complete for {visit_id=}")
+        # Failed or killed too: the images it did judge are in the RUN, and the loader loads what it
+        # finds there once the RUN is in the chain (a RUN pipetask never wrote is reported, not chained).
+        self.define_chain(run, visit_id)
 
     def load_cmd(self, visit_id):
         """Build the loader's command line for a single visit; None when loading is off.

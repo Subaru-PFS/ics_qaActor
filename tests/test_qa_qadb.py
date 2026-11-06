@@ -218,34 +218,34 @@ class TestLoadQadb:
 
 class TestRunLoop:
     def test_each_visit_is_loaded_after_its_pipetask(self, loading, popens):
-        calls = popens(0, 0, 0, 0, 0, 0)
+        calls = popens(0, 0, 0, 0, 0, 0, 0, 0)
         loading.enqueue_visit(1)
         loading.enqueue_visit(2)
         loading.stop()
         loading.run()
-        # pipetask, the loader, then the twilight judge (INSTRM-3089), per visit.
-        assert [cmd[0] for cmd in calls] == ["pipetask", "python", "python"] * 2
+        # pipetask, the chain (INSTRM-3096), the loader, then the twilight judge (INSTRM-3089), per visit.
+        assert [cmd[0] for cmd in calls] == ["pipetask", "python", "python", "python"] * 2
         loads = [cmd for cmd in calls if "--visits" in cmd]
         assert [cmd[cmd.index("--visits") + 1] for cmd in loads] == ["1", "2"]
-        assert [calls.index(cmd) for cmd in loads] == [1, 4]
+        assert [calls.index(cmd) for cmd in loads] == [2, 6]
 
     def test_a_failed_pipetask_is_still_loaded(self, loading, popens):
         # pipetask exits non-zero when any quantum fails; the other images' verdicts are in the Butler.
-        calls = popens(3, 0, 0)
+        calls = popens(3, 0, 0, 0)
         loading.enqueue_visit(1)
         loading.stop()
         loading.run()
-        assert [cmd[0] for cmd in calls] == ["pipetask", "python", "python"]
-        assert "--visits" in calls[1]
+        assert [cmd[0] for cmd in calls] == ["pipetask", "python", "python", "python"]
+        assert "--visits" in calls[2]
 
     def test_a_failed_load_does_not_stop_the_loop(self, loading, popens, caplog):
-        calls = popens(0, 1, 0, 0, 0, 0)
+        calls = popens(0, 0, 1, 0, 0, 0, 0, 0)
         loading.enqueue_visit(1)
         loading.enqueue_visit(2)
         loading.stop()
         with caplog.at_level(logging.INFO):
             loading.run()
-        assert len(calls) == 6
+        assert len(calls) == 8
         assert (
             "qadb load failed for visit_id=1" in caplog.text and "qadb loaded for visit_id=2" in caplog.text
         )
