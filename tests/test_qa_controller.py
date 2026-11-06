@@ -7,6 +7,7 @@ test the subprocess plumbing, by a short Python program.
 
 import logging
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -14,7 +15,7 @@ import time
 
 import pytest
 
-from qaActor.Controllers.qa import DEFAULT_TIMEOUT, qa
+from qaActor.Controllers.qa import DEFAULT_TIMEOUT, DefineChain, qa
 
 from .conftest import FakeActor
 
@@ -190,7 +191,7 @@ class TestInit:
 # ------------------------------------------------------------------------------
 class TestPipetaskCmd:
     def test_builds_the_exact_command_line(self, controller):
-        assert controller.pipetask_cmd(12345) == [
+        assert controller.pipetask_cmd(12345, "qaActor/reductions/20261106T200000Z") == [
             "pipetask",
             "--long-log",
             "--log-level",
@@ -202,19 +203,95 @@ class TestPipetaskCmd:
             "/work/datastore",
             "-i",
             "PFS/calib/2024,drpActor/reductions,PFS/defaults",
-            "-o",
-            "qaActor/reductions",
-            "--rebase",
+            "--output-run",
+            "qaActor/reductions/20261106T200000Z",
             "-p",
             "/opt/drp_qa/pipelines/drpQA.yaml",
             "-d",
             "visit = 12345",
         ]
 
-    def test_rebases_the_output_chain_onto_the_current_inputs(self, controller):
-        # The output chain keeps a flattened snapshot of the inputs, which drpActor's new runs
-        # make stale; without --rebase pipetask refuses every visit after the first new one.
-        assert "--rebase" in controller.pipetask_cmd(1)
+    def test_writes_a_run_and_never_manages_the_chain(self, controller):
+        # With -o, pipetask searches the output chain as stored, a flattened snapshot of the inputs
+        # at the last successful run, so a visit in a newer drpActor RUN finds nothing (INSTRM-3096).
+        cmd = controller.pipetask_cmd(1)
+        assert "-o" not in cmd and "--rebase" not in cmd
+        assert "--output-run" in cmd and "-i" in cmd
+
+    def test_a_new_run_is_named_by_the_utc_time_under_the_output_collection(self, controller):
+        run = controller.new_run()
+        assert re.fullmatch(r"qaActor/reductions/\d{8}T\d{6}Z", run), run
+        cmd = controller.pipetask_cmd(1)
+        assert re.fullmatch(r"qaActor/reductions/\d{8}T\d{6}Z", cmd[cmd.index("--output-run") + 1])
+
+
+class TestChainCmd:
+    """`qaActor.chain` owns the output chain: own RUNs first, then the inputs as chained members."""
+
+    def test_builds_the_exact_command_line(self, controller):
+        assert controller.chain_cmd() == [
+            "python", "-m", "qaActor.chain",
+            "-b", "/work/datastore",
+            "-c", "qaActor/reductions",
+            "-i", "PFS/calib/2024,drpActor/reductions,PFS/defaults",
+        ]  # fmt: skip
+        assert controller.chain_cmd("qaActor/reductions/20261106T200000Z")[-2:] == [
+            "--run", "qaActor/reductions/20261106T200000Z",
+        ]  # fmt: skip
+
+    def test_a_visit_prepends_its_run_after_its_pipetask(self, controller, fakePopen):
+        calls = fakePopen()
+        controller.run_pipetask(42)
+        assert [c["cmd"][0] for c in calls] == ["pipetask", "python"]
+        pipetask, chain = calls[0]["cmd"], calls[1]["cmd"]
+        assert chain[:3] == ["python", "-m", "qaActor.chain"]
+        assert chain[chain.index("--run") + 1] == pipetask[pipetask.index("--output-run") + 1]
+
+    def test_a_failed_pipetask_still_chains_what_it_wrote(self, controller, fakePopen):
+        calls = fakePopen(exitCode=3)
+        controller.run_pipetask(42)
+        assert [c["cmd"][0] for c in calls] == ["pipetask", "python"] and "--run" in calls[1]["cmd"]
+
+    def test_a_failed_chain_is_a_warning_naming_the_run(self, controller, fakePopen, caplog):
+        fakePopen(exitCode=1)
+        with caplog.at_level(logging.INFO):
+            ok = controller.define_chain("qaActor/reductions/20261106T200000Z", 42)
+        assert ok is False
+        (warning, failed) = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert "qaActor/reductions/20261106T200000Z is not in qaActor/reductions" in warning
+        assert failed.startswith("Failed command: python -m qaActor.chain")
+
+    def test_defining_the_chain_succeeds_quietly(self, controller, fakePopen, caplog):
+        fakePopen(lines=["qaActor/reductions: unchanged, 3 RUNs then drpActor/reductions\n"])
+        with caplog.at_level(logging.INFO):
+            assert controller.define_chain() is True
+        assert "qaActor/reductions: unchanged" in caplog.text
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_the_chain_has_its_own_timeout(self, controller, monkeypatch, caplog):
+        program = "import time; time.sleep(30)"
+        monkeypatch.setattr(controller, "chain_cmd", lambda run=None: [sys.executable, "-c", program])
+        controller.chain_timeout = 0.5
+        controller.timeout = 600  # the pipetask's, which must not apply here
+        with caplog.at_level(logging.INFO):
+            assert controller.define_chain() is False
+        assert "output chain for visit_id=None exceeded 0.5s, killing it" in caplog.text
+        assert "output chain timed out: qaActor/reductions is not defined" in caplog.text
+
+    def test_start_asks_the_loop_to_define_the_chain_first(self, controller, monkeypatch):
+        monkeypatch.setattr(threading.Thread, "start", lambda self: None)  # keep the loop from consuming
+        controller.enqueue_visit(7)
+        controller.start()
+        # The chain item is put at start, behind anything already queued: both run before the loop blocks.
+        items = [controller.processing_queue.get_nowait() for _ in range(2)]
+        assert items[1] == DefineChain() and items[0] == 7
+
+    def test_the_loop_defines_the_chain_on_the_item(self, controller, fakePopen):
+        calls = fakePopen()
+        controller.processing_queue.put(DefineChain())
+        controller.stop()
+        controller.run()
+        assert [c["cmd"] for c in calls] == [controller.chain_cmd()]
 
     def test_num_procs_is_stringified_for_the_j_flag(self, controller):
         cmdLine = controller.pipetask_cmd(1)
@@ -237,8 +314,10 @@ class TestRunPipetask:
         calls = fakePopen()
         controller.run_pipetask(42)
 
-        assert len(calls) == 1
-        assert calls[0]["cmd"] == controller.pipetask_cmd(42)
+        assert len(calls) == 2  # pipetask, then the chain step with the same RUN
+        run = calls[0]["cmd"][calls[0]["cmd"].index("--output-run") + 1]
+        assert calls[0]["cmd"] == controller.pipetask_cmd(42, run)
+        assert calls[1]["cmd"] == controller.chain_cmd(run)
         assert calls[0]["kwargs"] == {
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
@@ -291,7 +370,10 @@ class TestRunPipetask:
     def test_against_a_real_subprocess(self, controller, monkeypatch, caplog, exitCode, expected):
         """Exercise the actual Popen/stdout/wait path, standing in for pipetask."""
         program = f"import sys; print('hello from the pipeline'); sys.exit({exitCode})"
-        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        monkeypatch.setattr(
+            controller, "pipetask_cmd", lambda visitId, run=None: [sys.executable, "-c", program]
+        )
+        monkeypatch.setattr(controller, "define_chain", lambda *args, **kwargs: True)
 
         with caplog.at_level(logging.INFO):
             controller.run_pipetask(42)
@@ -319,7 +401,10 @@ class TestPipetaskResourceHandling:
 
     def test_a_real_subprocess_leaves_no_open_pipe(self, controller, monkeypatch):
         program = "print('done')"
-        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        monkeypatch.setattr(
+            controller, "pipetask_cmd", lambda visitId, run=None: [sys.executable, "-c", program]
+        )
+        monkeypatch.setattr(controller, "define_chain", lambda *args, **kwargs: True)
 
         opened = []
         realPopen = subprocess.Popen
@@ -345,7 +430,10 @@ class TestPipetaskTimeout:
         # Sleeps far longer than the timeout and never writes a line, so the read
         # loop is blocked: only the watchdog can end this.
         program = "import time; time.sleep(30)"
-        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        monkeypatch.setattr(
+            controller, "pipetask_cmd", lambda visitId, run=None: [sys.executable, "-c", program]
+        )
+        monkeypatch.setattr(controller, "define_chain", lambda *args, **kwargs: True)
         controller.timeout = 0.5
 
         started = time.monotonic()
@@ -358,7 +446,10 @@ class TestPipetaskTimeout:
 
     def test_a_timeout_is_reported_as_a_timeout_not_a_plain_failure(self, controller, monkeypatch, caplog):
         program = "import time; time.sleep(30)"
-        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        monkeypatch.setattr(
+            controller, "pipetask_cmd", lambda visitId, run=None: [sys.executable, "-c", program]
+        )
+        monkeypatch.setattr(controller, "define_chain", lambda *args, **kwargs: True)
         controller.timeout = 0.5
 
         with caplog.at_level(logging.INFO):
@@ -373,7 +464,10 @@ class TestPipetaskTimeout:
         self, controller, monkeypatch, caplog
     ):
         program = "print('quick')"
-        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        monkeypatch.setattr(
+            controller, "pipetask_cmd", lambda visitId, run=None: [sys.executable, "-c", program]
+        )
+        monkeypatch.setattr(controller, "define_chain", lambda *args, **kwargs: True)
         controller.timeout = 30
 
         timers = []
@@ -411,7 +505,7 @@ class TestPipetaskTimeout:
         # time, and saying otherwise would send someone chasing a phantom hang.
         fakePopen(exitCode=0)
 
-        def fireImmediately(process, visitId, timedOut):
+        def fireImmediately(process, visitId, timedOut, *watchdogArgs):
             timedOut.set()
             return None
 
@@ -453,7 +547,10 @@ class TestPipetaskTimeout:
 
     def test_a_timed_out_visit_does_not_stop_the_loop(self, controller, monkeypatch, caplog):
         program = "import time; time.sleep(30)"
-        monkeypatch.setattr(controller, "pipetask_cmd", lambda visitId: [sys.executable, "-c", program])
+        monkeypatch.setattr(
+            controller, "pipetask_cmd", lambda visitId, run=None: [sys.executable, "-c", program]
+        )
+        monkeypatch.setattr(controller, "define_chain", lambda *args, **kwargs: True)
         controller.timeout = 0.5
 
         controller.enqueue_visit(1)
@@ -606,7 +703,7 @@ class TestLifecycle:
         assert "Pipeline path: /opt/drp_qa/pipelines/drpQA.yaml" in caplog.text
         assert "Datastore: /work/datastore" in caplog.text
         assert "Input collections: PFS/calib/2024,drpActor/reductions,PFS/defaults" in caplog.text
-        assert "Output collection: qaActor/reductions" in caplog.text
+        assert "output: qaActor/reductions = this actor's RUNs, newest first, then" in caplog.text
 
     def test_start_reports_to_the_commander_when_given_one(self, controller, cmd):
         controller.run_pipetask = lambda visitId: None

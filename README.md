@@ -28,7 +28,9 @@ drp2      --[reduceExposureStatus]--> qaActor (Drp model callback)
 - **`models/drp.py`** — `Drp` class; MHS callback that validates incoming keys and enqueues visit IDs.
 - **`Controllers/qa.py`** — `qa` controller; a daemon thread whose `run` method is the QA consumer loop, alive for the
   lifetime of the actor. It is started when the controller is attached, builds and runs the `pipetask` command for each
-  visit, and exposes the queue API to the command layer.
+  visit (into a RUN of its own), chains the RUN, and exposes the queue API to the command layer.
+- **`chain.py`** — owns the output chain (`qaActor/reductions`): run with the stack's python by the controller, at
+  start and after each visit's `pipetask`, see *The output chain*.
 - **`Commands/QaCmd.py`** — MHS command handler.
 
 ## Prerequisites
@@ -67,7 +69,7 @@ currently does. Set them explicitly if this deployment wants something other tha
 ```
 
 Not everything is configurable: the `pipetask` logging flags (`--long-log`, `--log-level .=INFO`) are fixed in
-`pipetask_cmd()`.
+`pipetask_cmd()`, and so is how the output is collected (see *The output chain*).
 
 A `pipetask` run that outlives `timeout` is killed and logged as a timeout. The QA
 consumer is a single thread, so without this one stuck visit would block every
@@ -75,6 +77,26 @@ visit behind it for the rest of the night.
 
 The `$DRP_QA_DIR` environment variable must be set and point to the DRP QA pipeline package. The QA
 controller refuses to start if it is unset, rather than letting every visit fail inside `pipetask`.
+
+### The output chain
+
+Each visit's `pipetask` writes into a RUN of its own, `qaActor/reductions/<UTC time>`, given as
+`--output-run` with the inputs as `-i` and no `-o`. The actor then prepends the RUN to the CHAINED
+`qaActor/reductions` itself, with `python -m qaActor.chain` (the stack's python, as for the loader), and
+at start it defines, or repairs, that chain as: this actor's RUNs, newest first, then the input
+collections as chained members. The loader and the judge read `qaActor/reductions`, so they see every
+visit's QA behind the current inputs.
+
+`pipetask` never manages the chain (INSTRM-3096). Given `-o`, it writes the inputs into the chain
+*flattened*, as they were at that run, and builds every later quantum graph against the chain as stored;
+the drpActor prepends a RUN to `drpActor/reductions` several times a night, so the first new one made
+every later visit's graph empty, and `--rebase` cannot help because it rewrites the chain only after a
+successful run. The actor was silent from 2026-09-02 until this was found.
+
+A failed `pipetask` is chained too: the images it did judge are in the RUN, and the loader loads what it
+finds. A RUN `pipetask` never wrote is reported and left out. If chaining itself fails, the warning names
+the RUN and the command to rerun by hand, since until then the loader and the judge do not see that
+visit.
 
 ### Loading verdicts into qadb
 
