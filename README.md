@@ -80,12 +80,12 @@ controller refuses to start if it is unset, rather than letting every visit fail
 
 ### The output chain
 
-Each visit's `pipetask` writes into a RUN of its own, `qaActor/reductions/<UTC time>`, given as
+Each visit's `pipetask` writes into a RUN of its own, `qaActor/reductions/<UTC time>-<visit>`, given as
 `--output-run` with the inputs as `-i` and no `-o`. The actor then prepends the RUN to the CHAINED
 `qaActor/reductions` itself, with `python -m qaActor.chain` (the stack's python, as for the loader), and
-at start it defines, or repairs, that chain as: this actor's RUNs, newest first, then the input
-collections as chained members. The loader and the judge read `qaActor/reductions`, so they see every
-visit's QA behind the current inputs.
+at start, ahead of anything already queued, it defines, or repairs, that chain as: this actor's RUNs,
+newest first, then the input collections as chained members. The loader and the judge read
+`qaActor/reductions`, so they see every visit's QA behind the current inputs.
 
 `pipetask` never manages the chain (INSTRM-3096). Given `-o`, it writes the inputs into the chain
 *flattened*, as they were at that run, and builds every later quantum graph against the chain as stored;

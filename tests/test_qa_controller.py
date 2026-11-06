@@ -218,11 +218,13 @@ class TestPipetaskCmd:
         assert "-o" not in cmd and "--rebase" not in cmd
         assert "--output-run" in cmd and "-i" in cmd
 
-    def test_a_new_run_is_named_by_the_utc_time_under_the_output_collection(self, controller):
-        run = controller.new_run()
-        assert re.fullmatch(r"qaActor/reductions/\d{8}T\d{6}Z", run), run
+    def test_a_new_run_is_named_by_the_utc_time_and_the_visit_under_the_output_collection(self, controller):
+        run = controller.new_run(153136)
+        assert re.fullmatch(r"qaActor/reductions/\d{8}T\d{6}Z-153136", run), run
         cmd = controller.pipetask_cmd(1)
-        assert re.fullmatch(r"qaActor/reductions/\d{8}T\d{6}Z", cmd[cmd.index("--output-run") + 1])
+        assert re.fullmatch(r"qaActor/reductions/\d{8}T\d{6}Z-1", cmd[cmd.index("--output-run") + 1])
+        # Two visits in the same second get different RUNs: a RUN is one visit's output.
+        assert controller.new_run(1) != controller.new_run(2)
 
 
 class TestChainCmd:
@@ -282,9 +284,10 @@ class TestChainCmd:
         monkeypatch.setattr(threading.Thread, "start", lambda self: None)  # keep the loop from consuming
         controller.enqueue_visit(7)
         controller.start()
-        # The chain item is put at start, behind anything already queued: both run before the loop blocks.
+        # The chain item goes to the head of the queue, ahead of a visit the drp model enqueued first.
         items = [controller.processing_queue.get_nowait() for _ in range(2)]
-        assert items[1] == DefineChain() and items[0] == 7
+        assert items == [DefineChain(), 7]
+        assert controller.processing_queue.empty()
 
     def test_the_loop_defines_the_chain_on_the_item(self, controller, fakePopen):
         calls = fakePopen()

@@ -225,8 +225,12 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         self.logger.info(self.describe_twilight())
 
         # First thing the loop does: define (or repair) the chain, so the loader and the judge see
-        # this actor's RUNs behind the current inputs from the first visit on.
-        self.processing_queue.put(DefineChain())
+        # this actor's RUNs behind the current inputs from the first visit on. At the head of the
+        # queue, ahead of any visit the drp model enqueued before the controller started.
+        with self.processing_queue.mutex:
+            self.processing_queue.queue.appendleft(DefineChain())
+            self.processing_queue.unfinished_tasks += 1
+            self.processing_queue.not_empty.notify()
         super().start()
 
         if cmd:
@@ -285,9 +289,13 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             finally:
                 self._current_visit = None
 
-    def new_run(self):
-        """Name the RUN for one visit's pipetask: the output collection, slash, the UTC time."""
-        return f"{self.output_collection}/{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
+    def new_run(self, visit_id):
+        """Name the RUN for one visit's pipetask: the output collection, slash, the UTC time and the visit.
+
+        The visit keeps two visits processed within the same second apart (a quick failure, then the
+        next): a RUN is one visit's output, and the chain step must not merge them.
+        """
+        return f"{self.output_collection}/{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{visit_id}"
 
     def pipetask_cmd(self, visit_id, run=None):
         """Build the pipetask command line for a single visit, writing into `run` (default: a new one).
@@ -298,7 +306,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         of the inputs it wrote at the last successful run, and find nothing newer (INSTRM-3096);
         `qaActor.chain` keeps the output chain instead (`define_chain`).
         """
-        run = run or self.new_run()
+        run = run or self.new_run(visit_id)
         # fmt: off
         return [
             "pipetask",
@@ -374,7 +382,7 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         - Logs warnings if the pipeline fails (non-zero return code)
         - Logs a success message when the pipeline completes successfully
         """
-        run = self.new_run()
+        run = self.new_run(visit_id)
         cmd = self.pipetask_cmd(visit_id, run)
         returncode, timed_out = self._run_streamed(cmd, visit_id, self._start_watchdog)
 

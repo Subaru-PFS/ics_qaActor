@@ -247,7 +247,7 @@ loop blocks reading a silent child, so a `wait()` timeout would never be reached
 ## Things to be careful about
 
 - **pipetask never manages the output chain** (INSTRM-3096). `pipetask_cmd` passes `-i` with
-  `--output-run qaActor/reductions/<UTC>` and no `-o`/`--rebase`; `qaActor.chain` (run with the
+  `--output-run qaActor/reductions/<UTC>-<visit>` and no `-o`/`--rebase`; `qaActor.chain` (run with the
   stack's python, `python -m qaActor.chain`) prepends the RUN and keeps the chain as own RUNs then the
   inputs as *chained* members. Don't reintroduce `-o`: pipetask writes the inputs flattened and then
   searches that snapshot, so the drpActor's next RUN makes every later visit's graph empty.
