@@ -108,7 +108,7 @@ they would never be set up for it. Keep it that way — do not install a sibling
 import work; if the import is genuinely needed, declare it in the table and `pyproject.toml` first.
 
 `drp_qa` is in the EUPS table but is *not* installed: the actor only needs `$DRP_QA_DIR` as a path
-to hand `pipetask`, never as an import.
+to hand `pipetask` and the loader (`bin.src/drpQa.py load`), never as an import.
 
 ### Rebuilding the environment
 

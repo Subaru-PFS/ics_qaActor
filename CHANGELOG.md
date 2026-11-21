@@ -10,7 +10,7 @@ the notes of those before 0.5.0 are in the tags' messages (`git tag -n1`).
 
 ### Changed
 
-- **The loader is `drpQa.py load`; needs drp_qa 0.6.1** (INSTRM-3123) — drp_qa 0.6.1 removed
+- **The loader is `drpQa.py load`; needs drp_qa 0.5.0 or later** (INSTRM-3123) — drp_qa 0.5.0 removed
   `bin.src/loadQadb.py` and `bin.src/twilightQa.py`. Each visit's load is now
   `python $DRP_QA_DIR/bin.src/drpQa.py load` with the same options as before (`-b`, `-c`, `--visits`,
   `--mode realtime`, the qadb's `--host`/`--port`/`--user`/`--dbname` and the opdb's `--opdb-*`).
@@ -21,8 +21,9 @@ the notes of those before 0.5.0 are in the tags' messages (`git tag -n1`).
   drp_qa subprocess per visit, not two: the separate judge, its exit statuses and its timeout are gone
   (`TWILIGHT_JUDGE`, `TWILIGHT_TIMEOUT`, the five `TWILIGHT_*` statuses, `twilight_cmd`, `judge_twilight`).
   The judge's verdicts are no longer written to the Butler (`twilightQaMetrics`), and with qadb loading off
-  nothing is judged.
+  nothing is judged. A WARN or FAIL sequence no longer gets a WARNING line in the actor log: the loader's
+  output is relayed at INFO. The judging runs inside the load's timeout (`engine.qadb.timeout`, 300 s).
 - **`qa twilight <visit>` loads the visit** (INSTRM-3123) — it keeps its name, and queues a load of the visit
   without its QA, which judges the visit's sequence if complete. It now fails with qadb loading off as well
-  as without a `db.opdb`. `start` and `status` say the load judges twilights, and `qadb:` names
-  `drpQa.py load`.
+  as without a `db.opdb`. A visit the actor never processed needs `qa process <visit>` instead. `start` and
+  `status` say the load judges twilights, and `qadb:` names `drpQa.py load`.

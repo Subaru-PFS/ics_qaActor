@@ -161,6 +161,8 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
         """One line on whether twilight sequences are judged: by the load of a sequence's last visit."""
         if self.opdb_host is None:
             return "twilight: not judging sequences (the config has no db.opdb)"
+        if self.qadb is None:
+            return "twilight: not judging sequences (the config has no db.qadb to load into)"
         if not self.qadb_load:
             return (
                 "twilight: not judging sequences (qadb loading is off: the load of a sequence's last visit"

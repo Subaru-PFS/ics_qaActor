@@ -97,11 +97,12 @@ class QaCmd:
         """Load a visit into qadb again, without re-running its QA; the load judges its twilight sequence.
 
         The command keeps its name from when a separate judge ran: drp_qa's loader now judges a
-        twilight sequence itself, when a load finds it complete. This is for a sequence the automatic
-        load of its last visit missed: the actor was down for that visit, its reduction was never
-        reported, its status row came late, or the load failed. The loader still checks that the
-        sequence is a finished twilight with every visit's tables stored. It loads any visit, twilight
-        or not, and needs both databases: db.opdb to find the sequence, and qadb loading on.
+        twilight sequence itself, when a load finds it complete. This is for a sequence whose last
+        visit went through QA but whose load did not judge it: the load failed, loading was off, or
+        the sequence's status row came late. A visit the actor never processed (it was down, or the
+        reduction was never reported) has no QA tables to load: `qa process <visit>` runs its QA and
+        then the load. It loads any visit, twilight or not, and needs both databases: db.opdb to find
+        the sequence, and qadb loading on.
         """
         visit_id = int(cmd.cmd.keywords["visit_id"].values[0])
         controller = self._get_controller()

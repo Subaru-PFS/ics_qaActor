@@ -41,7 +41,7 @@ drp2      --[reduceExposureStatus]--> qaActor (Drp model callback)
 | `tron_actorcore`| EUPS package — `actorcore`/`opscore`; set up transitively by `ics_actorkeys` |
 | `pfs_instdata`  | EUPS package — instrument data                               |
 | `pfs_utils`     | EUPS package — PFS utilities                                 |
-| `drp_qa`        | EUPS package, 0.6.1 or later (`bin.src/drpQa.py`); sets `DRP_QA_DIR`, which the pipeline and loader paths use |
+| `drp_qa`        | EUPS package, 0.5.0 or later (`bin.src/drpQa.py`); sets `DRP_QA_DIR`, which the pipeline and loader paths use |
 
 ## Configuration
 
@@ -103,14 +103,14 @@ visit.
 Each visit's QA numbers are copied into qadb after its `pipetask` and judged there, one verdict per
 image (INSTRM-3040), by drp_qa's loader run the way `pipetask` is:
 `python $DRP_QA_DIR/bin.src/drpQa.py load -b <datastore> -c <output> --visits <visit> --mode realtime ...`
-(INSTRM-3123; drp_qa 0.6.1 removed `loadQadb.py`).
+(INSTRM-3123; drp_qa 0.5.0 removed `loadQadb.py`).
 `engine.qadb.load` defaults to on; `load: false` switches it off, and `start` and `status` say
 whether it is loading. `qa qadb on|off` switches it while the actor runs (see *Commands accepted*).
 
 Where to connect comes from the shared actor config (`pfs_instdata/config/actors/actors.yaml`, merged
 into `actorConfig`), as for the other actors' databases: `db.qadb` (`host` required; `port`, `user`,
 `dbname` default to 5436, `pfs`, `qadb`) and `db.opdb` (`host` required; `port`, `user`, `dbname`
-default to 5432, `public_user`, `opdb`). Both blocks are passed whole to drp_qa's scripts. Only the
+default to 5432, `public_user`, `opdb`). Both blocks are passed whole to drp_qa's loader. Only the
 switch and its options are in
 `qa.yaml`:
 
@@ -144,13 +144,16 @@ load that finds a twilight visit looks its sequence up there and, once the seque
 visit has its `twilightFiberFlux`, measures the sequence into `twilight_qa` and judges it into `qa_gate`,
 the visits loaded earlier included. So the load of a sequence's last visit judges it, with no second call
 (INSTRM-3123); until then, and without an opdb, a twilight image is `UNKNOWN`. What the loader found is in
-its output, which the actor relays to its log.
+its output, which the actor relays to its log at INFO: a WARN or FAIL sequence raises no WARNING line.
 
 There is nothing to configure: judging needs `db.opdb` and qadb loading on (without either nothing is
-judged, and `start` and `status` say so). A sequence the automatic load missed (the actor was down for its
-last visit, the load failed, loading was off) is judged by hand with `qa twilight <visit>`, which loads
-that visit again without re-running its QA. The command keeps its name from when a separate judge ran; it
-loads any visit, and the loader judges the sequence if it is complete.
+judged, and `start` and `status` say so). The judging runs inside the load's timeout (`engine.qadb.timeout`).
+A sequence whose last visit went through QA but was not judged (the load failed, loading was off, the
+sequence's status row came late) is judged by hand with `qa twilight <visit>`, which loads that visit again
+without re-running its QA. A last visit the actor never processed (it was down, or the reduction was never
+reported) has no QA tables to load: `qa process <visit>` runs its QA and then the load. `qa twilight` keeps
+its name from when a separate judge ran; it loads any visit, and the loader judges the sequence if it is
+complete.
 
 ## MHS Interface
 

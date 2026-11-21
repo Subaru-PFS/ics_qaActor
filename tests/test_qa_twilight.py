@@ -65,6 +65,14 @@ class TestConfig:
     def test_without_a_db_opdb_nothing_is_judged(self, controller):
         assert controller.describe_twilight() == "twilight: not judging sequences (the config has no db.opdb)"
 
+    def test_without_a_db_qadb_nothing_is_judged(self, sharedConfig, logger, drpQaDir):  # noqa: F811
+        del sharedConfig["db"]["qadb"]
+        del sharedConfig["engine"]["qadb"]
+        line = qa(FakeActor(sharedConfig, logger), "qa").describe_twilight()
+        assert line == "twilight: not judging sequences (the config has no db.qadb to load into)"
+        # Negative control: it does not point at `qa twilight`, which cannot load without a db.qadb.
+        assert "qa twilight" not in line
+
     def test_with_loading_off_nothing_is_judged(self, judging):
         judging.set_qadb_load(False)
         assert judging.describe_twilight().startswith("twilight: not judging sequences (qadb loading is off")
@@ -112,8 +120,17 @@ class TestRunLoop:
         judging.run()
         loaderCalls = [cmd for cmd in calls if cmd[0] == "python" and cmd[1].startswith("/opt/drp_qa/")]
         assert loaderCalls == [judging.load_cmd(1)]
-        # Negative control: the two calls per visit of before would be two here.
-        assert len(loaderCalls) != 2
+
+    def test_the_count_sees_a_second_call(self, judging, popens):  # noqa: F811
+        # Negative control for the test above: a visit with two drp_qa calls (here a `qa twilight` of the
+        # same visit behind it) is counted as two, so one call per visit is not the counter's blindness.
+        calls = popens(0, 0, 0, 0)
+        judging.enqueue_visit(1)
+        judging.enqueue_load(1)
+        judging.stop()
+        judging.run()
+        loaderCalls = [cmd for cmd in calls if cmd[0] == "python" and cmd[1].startswith("/opt/drp_qa/")]
+        assert len(loaderCalls) == 2
 
     def test_a_qa_twilight_runs_the_load_alone(self, judging, popens):  # noqa: F811
         calls = popens(0)

@@ -160,7 +160,7 @@ class TestSetQadbLoad:
         assert calls == []
 
 
-#: The command line `load_cmd(42)` must build for `loading`, exactly (drp_qa 0.6.1's `drpQa.py load`).
+#: The command line `load_cmd(42)` must build for `loading`, exactly (drp_qa's `drpQa.py load`).
 EXPECTED_LOAD = [
     "python", "/opt/drp_qa/bin.src/drpQa.py", "load",
     "-b", "/work/datastore",
@@ -181,11 +181,33 @@ EXPECTED_LOAD = [
 class TestLoadCmd:
     def test_builds_the_exact_command_line(self, loading, sharedConfig, logger):
         assert loading.load_cmd(42) == EXPECTED_LOAD
-        # Negative control: a loader at the old path, drp_qa's removed loadQadb.py, fails the comparison.
+        # Negative controls: the command of before, the removed loadQadb.py with no subcommand, is not
+        # what is built, and neither is drpQa.py without `load`.
+        old = ["python", "/opt/drp_qa/bin.src/loadQadb.py", *EXPECTED_LOAD[3:]]
+        assert loading.load_cmd(42) != old
+        assert loading.load_cmd(42) != [arg for arg in EXPECTED_LOAD if arg != "load"]
+        # A config still naming loadQadb.py builds the old path, which the exact comparison rejects.
         sharedConfig["engine"]["qadb"]["loader"] = "$DRP_QA_DIR/bin.src/loadQadb.py"
-        old = qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42)
-        assert old[1] == "/opt/drp_qa/bin.src/loadQadb.py"
-        assert old != EXPECTED_LOAD
+        stale = qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42)
+        assert stale[1] == "/opt/drp_qa/bin.src/loadQadb.py" and stale != EXPECTED_LOAD
+
+    def test_the_opdb_account_follows_the_config(self, sharedConfig, logger, drpQaDir):
+        sharedConfig["db"]["opdb"] = {
+            "host": "pfsa-db", "port": 5433, "user": "reader", "dbname": "opdb_copy",
+        }  # fmt: skip
+        cmd = qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42)
+        assert cmd[cmd.index("--opdb-host") :] == [
+            "--opdb-host", "pfsa-db", "--opdb-port", "5433",
+            "--opdb-user", "reader", "--opdb-dbname", "opdb_copy",
+        ]  # fmt: skip
+
+    def test_an_opdb_host_alone_takes_the_loaders_defaults(self, sharedConfig, logger, drpQaDir):
+        sharedConfig["db"]["opdb"] = {"host": "pfsa-db"}
+        cmd = qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42)
+        assert cmd[cmd.index("--opdb-host") :] == [
+            "--opdb-host", "pfsa-db", "--opdb-port", "5432",
+            "--opdb-user", "public_user", "--opdb-dbname", "opdb",
+        ]  # fmt: skip
 
     def test_loads_the_collection_the_pipeline_writes(self, loading):
         cmd = loading.load_cmd(42)
