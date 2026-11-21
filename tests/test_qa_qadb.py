@@ -1,7 +1,7 @@
 """Tests for loading each visit into qadb after its pipetask (INSTRM-3040).
 
-The loader is drp_qa's `bin.src/loadQadb.py`, run as a subprocess the way
-`pipetask` is; it is replaced by a fake Popen, or by a short Python program
+The loader is drp_qa's `bin.src/drpQa.py load`, run as a subprocess
+the way `pipetask` is; it is replaced by a fake Popen, or by a short Python program
 where the point is the watchdog.
 """
 
@@ -85,7 +85,12 @@ class TestConfig:
         assert loading.qadb == DB["qadb"] and loading.opdb_host == "db-ics"
 
     def test_the_loader_path_is_expanded_against_the_environment(self, loading):
-        assert loading.loader_path == "/opt/drp_qa/bin.src/loadQadb.py"
+        assert loading.loader_path == "/opt/drp_qa/bin.src/drpQa.py"
+
+    def test_the_override_names_the_script_the_actor_adds_load(self, sharedConfig, logger, drpQaDir):
+        sharedConfig["engine"]["qadb"]["loader"] = "$DRP_QA_DIR/../other/bin.src/drpQa.py"
+        cmd = qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42)
+        assert cmd[:4] == ["python", "/opt/drp_qa/../other/bin.src/drpQa.py", "load", "-b"]
 
     def test_an_unset_loader_env_var_fails_at_construction(self, sharedConfig, logger, monkeypatch):
         sharedConfig["engine"]["pipeline"] = "/literal/drpQA.yaml"
@@ -139,7 +144,7 @@ class TestSetQadbLoad:
         assert not controller.qadb_load
 
     def test_switching_on_with_an_unset_loader_var_raises_and_stays_off(self, sharedConfig, logger, drpQaDir):
-        sharedConfig["engine"]["qadb"] = {"load": False, "loader": "$QA_TEST_UNSET_VAR/loadQadb.py"}
+        sharedConfig["engine"]["qadb"] = {"load": False, "loader": "$QA_TEST_UNSET_VAR/drpQa.py"}
         ctrl = qa(FakeActor(sharedConfig, logger), "qa")
         with pytest.raises(RuntimeError, match="QA_TEST_UNSET_VAR"):
             ctrl.set_qadb_load(True)
@@ -151,28 +156,36 @@ class TestSetQadbLoad:
         loading.enqueue_visit(42)
         loading.stop()
         loading.run()
-        # Only the twilight judge ran (INSTRM-3089), and without a qadb.
-        assert [cmd[1].rsplit("/", 1)[-1] for cmd in calls] == ["twilightQa.py"]
-        assert "--qadb-host" not in calls[0]
+        # No load, and no second call in its place: the loader judges twilights itself.
+        assert calls == []
+
+
+#: The command line `load_cmd(42)` must build for `loading`, exactly (drp_qa 0.6.1's `drpQa.py load`).
+EXPECTED_LOAD = [
+    "python", "/opt/drp_qa/bin.src/drpQa.py", "load",
+    "-b", "/work/datastore",
+    "-c", "qaActor/reductions",
+    "--visits", "42",
+    "--mode", "realtime",
+    "--host", "qadb-host",
+    "--port", "5436",
+    "--user", "pfs",
+    "--dbname", "qadb",
+    "--opdb-host", "db-ics",
+    "--opdb-port", "5432",
+    "--opdb-user", "pfs",
+    "--opdb-dbname", "opdb",
+]  # fmt: skip
 
 
 class TestLoadCmd:
-    def test_builds_the_exact_command_line(self, loading):
-        assert loading.load_cmd(42) == [
-            "python", "/opt/drp_qa/bin.src/loadQadb.py",
-            "-b", "/work/datastore",
-            "-c", "qaActor/reductions",
-            "--visits", "42",
-            "--mode", "realtime",
-            "--host", "qadb-host",
-            "--port", "5436",
-            "--user", "pfs",
-            "--dbname", "qadb",
-            "--opdb-host", "db-ics",
-            "--opdb-port", "5432",
-            "--opdb-user", "pfs",
-            "--opdb-dbname", "opdb",
-        ]  # fmt: skip
+    def test_builds_the_exact_command_line(self, loading, sharedConfig, logger):
+        assert loading.load_cmd(42) == EXPECTED_LOAD
+        # Negative control: a loader at the old path, drp_qa's removed loadQadb.py, fails the comparison.
+        sharedConfig["engine"]["qadb"]["loader"] = "$DRP_QA_DIR/bin.src/loadQadb.py"
+        old = qa(FakeActor(sharedConfig, logger), "qa").load_cmd(42)
+        assert old[1] == "/opt/drp_qa/bin.src/loadQadb.py"
+        assert old != EXPECTED_LOAD
 
     def test_loads_the_collection_the_pipeline_writes(self, loading):
         cmd = loading.load_cmd(42)
@@ -218,34 +231,34 @@ class TestLoadQadb:
 
 class TestRunLoop:
     def test_each_visit_is_loaded_after_its_pipetask(self, loading, popens):
-        calls = popens(0, 0, 0, 0, 0, 0, 0, 0)
+        calls = popens(0, 0, 0, 0, 0, 0)
         loading.enqueue_visit(1)
         loading.enqueue_visit(2)
         loading.stop()
         loading.run()
-        # pipetask, the chain (INSTRM-3096), the loader, then the twilight judge (INSTRM-3089), per visit.
-        assert [cmd[0] for cmd in calls] == ["pipetask", "python", "python", "python"] * 2
+        # pipetask, the chain, then the loader, which judges twilights too.
+        assert [cmd[0] for cmd in calls] == ["pipetask", "python", "python"] * 2
         loads = [cmd for cmd in calls if "--visits" in cmd]
         assert [cmd[cmd.index("--visits") + 1] for cmd in loads] == ["1", "2"]
-        assert [calls.index(cmd) for cmd in loads] == [2, 6]
+        assert [calls.index(cmd) for cmd in loads] == [2, 5]
 
     def test_a_failed_pipetask_is_still_loaded(self, loading, popens):
         # pipetask exits non-zero when any quantum fails; the other images' verdicts are in the Butler.
-        calls = popens(3, 0, 0, 0)
+        calls = popens(3, 0, 0)
         loading.enqueue_visit(1)
         loading.stop()
         loading.run()
-        assert [cmd[0] for cmd in calls] == ["pipetask", "python", "python", "python"]
+        assert [cmd[0] for cmd in calls] == ["pipetask", "python", "python"]
         assert "--visits" in calls[2]
 
     def test_a_failed_load_does_not_stop_the_loop(self, loading, popens, caplog):
-        calls = popens(0, 0, 1, 0, 0, 0, 0, 0)
+        calls = popens(0, 0, 1, 0, 0, 0)
         loading.enqueue_visit(1)
         loading.enqueue_visit(2)
         loading.stop()
         with caplog.at_level(logging.INFO):
             loading.run()
-        assert len(calls) == 8
+        assert len(calls) == 6
         assert (
             "qadb load failed for visit_id=1" in caplog.text and "qadb loaded for visit_id=2" in caplog.text
         )

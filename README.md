@@ -41,7 +41,7 @@ drp2      --[reduceExposureStatus]--> qaActor (Drp model callback)
 | `tron_actorcore`| EUPS package — `actorcore`/`opscore`; set up transitively by `ics_actorkeys` |
 | `pfs_instdata`  | EUPS package — instrument data                               |
 | `pfs_utils`     | EUPS package — PFS utilities                                 |
-| `DRP_QA_DIR`    | Environment variable pointing to the DRP QA pipeline package |
+| `drp_qa`        | EUPS package, 0.6.1 or later (`bin.src/drpQa.py`); sets `DRP_QA_DIR`, which the pipeline and loader paths use |
 
 ## Configuration
 
@@ -84,7 +84,7 @@ Each visit's `pipetask` writes into a RUN of its own, `qaActor/reductions/<UTC t
 `--output-run` with the inputs as `-i` and no `-o`. The actor then prepends the RUN to the CHAINED
 `qaActor/reductions` itself, with `python -m qaActor.chain` (the stack's python, as for the loader), and
 at start, ahead of anything already queued, it defines, or repairs, that chain as: this actor's RUNs,
-newest first, then the input collections as chained members. The loader and the judge read
+newest first, then the input collections as chained members. The loader reads
 `qaActor/reductions`, so they see every visit's QA behind the current inputs.
 
 `pipetask` never manages the chain (INSTRM-3096). Given `-o`, it writes the inputs into the chain
@@ -95,14 +95,15 @@ successful run. The actor was silent from 2026-09-02 until this was found.
 
 A failed `pipetask` is chained too: the images it did judge are in the RUN, and the loader loads what it
 finds. A RUN `pipetask` never wrote is reported and left out. If chaining itself fails, the warning names
-the RUN and the command to rerun by hand, since until then the loader and the judge do not see that
+the RUN and the command to rerun by hand, since until then the loader does not see that
 visit.
 
 ### Loading verdicts into qadb
 
-Each visit's QA tables and per-image verdicts are copied into qadb after its `pipetask`
-(INSTRM-3040), by drp_qa's loader run the way `pipetask` is:
-`python $DRP_QA_DIR/bin.src/loadQadb.py -c <output> --visits <visit> --mode realtime ...`.
+Each visit's QA numbers are copied into qadb after its `pipetask` and judged there, one verdict per
+image (INSTRM-3040), by drp_qa's loader run the way `pipetask` is:
+`python $DRP_QA_DIR/bin.src/drpQa.py load -b <datastore> -c <output> --visits <visit> --mode realtime ...`
+(INSTRM-3123; drp_qa 0.6.1 removed `loadQadb.py`).
 `engine.qadb.load` defaults to on; `load: false` switches it off, and `start` and `status` say
 whether it is loading. `qa qadb on|off` switches it while the actor runs (see *Commands accepted*).
 
@@ -117,8 +118,11 @@ switch and its options are in
   qadb:
     load: true               # copy each visit's verdicts into db.qadb; default true
     timeout: 300             # seconds before a hung load is killed; default 300, 0 to disable
-    loader: "$DRP_QA_DIR/bin.src/loadQadb.py"   # default
+    loader: "$DRP_QA_DIR/bin.src/drpQa.py"   # default; the actor adds the subcommand, `load`
 ```
+
+- `loader` names drp_qa's `drpQa.py`, not a subcommand: the actor runs it as `<loader> load`. An
+  override still naming the removed `loadQadb.py` fails every visit's load.
 
 - `load: true` set without a `db.qadb` stops the actor at startup, rather than failing every
   visit. With `load` left unset, a missing `db.qadb` only means nothing is loaded.
@@ -135,29 +139,18 @@ switch and its options are in
 ### Judging twilight sequences
 
 A twilight sky flat is judged against the other exposures of its IIC sequence, which one visit's
-QA cannot see (PIPE2D-1973). So after each visit's load the actor runs drp_qa's judge,
-`python $DRP_QA_DIR/bin.src/twilightQa.py -c <output> --sequence-of-visit <visit> --opdb-host <db.opdb.host> --opdb-user ... `
-(INSTRM-3089). The judge looks the visit's sequence up in the opdb and does nothing unless it is a
-twilight that has finished (`iic_sequence_status`) with a `twilightFiberFlux` stored for every visit
-and camera; the call after the sequence's last visit judges it. It prints one verdict per exposure
-and arm (`PASS`, `WARN`, `FAIL` or `TOO_FAINT`, with the reasons), stores one verdict per detector
-image (`PASS`, `WARN`, `FAIL`, or `UNKNOWN` for the unjudged n arm, with the measurements behind it)
-in the Butler as `twilightQaMetrics`, a new RUN prepended to the output collection, then loads the
-sequence's visits into qadb: `twilight_qa`, and `qa_gate`, where the sequence check is a third task
-beside `imageQualityQa` and `dmLineResiduals` (`spt_qa_database` 0.3.0). Its exit status tells the
-actor what happened, and the actor logs it: judged with every exposure `PASS` or `TOO_FAINT`, judged
-with a `WARN` or `FAIL` exposure (a WARNING, so it stands out in the log; the judge's output above it
-says which exposures and why), pending, not a twilight (quiet), or judged but not stored or loaded, in
-which case the judge has printed the verdicts in full, so the actor log holds them. There is no actor
-keyword or alert beyond the log yet.
+QA cannot see (PIPE2D-1973). drp_qa's loader does it: given the opdb (`--opdb-host`, from `db.opdb`), a
+load that finds a twilight visit looks its sequence up there and, once the sequence has finished and every
+visit has its `twilightFiberFlux`, measures the sequence into `twilight_qa` and judges it into `qa_gate`,
+the visits loaded earlier included. So the load of a sequence's last visit judges it, with no second call
+(INSTRM-3123); until then, and without an opdb, a twilight image is `UNKNOWN`. What the loader found is in
+its output, which the actor relays to its log.
 
-There is nothing to configure: the judge needs `db.opdb` (without it nothing is judged, and
-`start` and `status` say so), loads into `db.qadb` while qadb loading is on (with `qadb off` the
-verdict is still stored in the Butler, and reaches qadb only through a later `qa twilight`), and has
-its own timeout (`TWILIGHT_TIMEOUT`, 300 s: the judging takes seconds, the reload of the sequence's
-visits into qadb most of the rest). A sequence the automatic call missed (the actor was down for its
-last visit, the store or load failed, loading was off) is judged by hand with `qa twilight <visit>`,
-which runs the judge alone, without the visit's QA.
+There is nothing to configure: judging needs `db.opdb` and qadb loading on (without either nothing is
+judged, and `start` and `status` say so). A sequence the automatic load missed (the actor was down for its
+last visit, the load failed, loading was off) is judged by hand with `qa twilight <visit>`, which loads
+that visit again without re-running its QA. The command keeps its name from when a separate judge ran; it
+loads any visit, and the loader judges the sequence if it is complete.
 
 ## MHS Interface
 
@@ -178,11 +171,11 @@ the key definitions come from `actorkeys/drp.py` even though the model is regist
 | Command              | Description                                                                                             |
 |----------------------|---------------------------------------------------------------------------------------------------------|
 | `ping`               | Returns the product name; used as a liveness check                                                      |
-| `status`             | Reports the visit being processed, the queue depth, whether each visit is loaded into qadb, and whether and where twilight sequences are judged |
+| `status`             | Reports the visit being processed, the queue depth, whether each visit is loaded into qadb, and whether twilight sequences are judged |
 | `show`               | Dumps all key-value pairs from all subscribed MHS models                                                |
 | `process <visit_id>` | Manually enqueues a visit ID for QA processing (bypasses the automatic `reduceExposureStatus` listener) |
 | `qadb on\|off`       | Switches loading into qadb on or off from the next visit's load; fails if `on` has no `db.qadb`         |
-| `twilight <visit_id>` | Judges the visit's twilight sequence now, without re-running its QA (see *Judging twilight sequences*); fails without a `db.opdb` |
+| `twilight <visit_id>` | Loads the visit into qadb again without re-running its QA, which judges its twilight sequence if complete (see *Judging twilight sequences*); fails without a `db.opdb` or with qadb loading off |
 
 `qadb on|off` lasts until the controller is rebuilt (an actor restart, or `disconnect`/`connect
 controller=qa`); `engine.qadb.load` applies again after that.

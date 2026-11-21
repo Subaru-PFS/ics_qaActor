@@ -5,7 +5,7 @@ repair the chain, and after each visit's pipetask, to prepend the RUN it wrote. 
 touches the chain (INSTRM-3096): given ``-o``, it would write the inputs into the chain flattened, as they
 were at that run, and build every later quantum graph against that snapshot, so the first new
 ``drpActor/reductions`` RUN would make every later visit fail. With ``--output-run`` and no ``-o`` the
-inputs are resolved when each visit runs, and this module keeps the chain the loader and the judge read.
+inputs are resolved when each visit runs, and this module keeps the chain the loader reads.
 """
 
 import argparse

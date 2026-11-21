@@ -302,18 +302,22 @@ class TestTwilight:
         actor.controllers["qa"] = qa(actor, "qa")
         return QaCmd(actor)
 
-    def test_enqueues_the_judgement_alone(self, judgingCmd):
-        from qaActor.Controllers.qa import TwilightCheck
+    def test_enqueues_the_load_alone(self, judgingCmd):
+        from qaActor.Controllers.qa import LoadVisit
 
         cmd = KeywordCmd(visit_id=types.Int()("150844"))
         judgingCmd.twilight(cmd)
-        item = judgingCmd._get_controller().processing_queue.get_nowait()
-        assert item == TwilightCheck(150844) and type(item.visit) is int
-        assert cmd.finishes == ['text="Enqueued the twilight judgement of visit_id=150844"']
+        controller = judgingCmd._get_controller()
+        item = controller.processing_queue.get_nowait()
+        assert item == LoadVisit(150844) and type(item.visit) is int
+        assert controller.queue_size() == 0  # one item: the load, no separate judgement
+        assert cmd.finishes == [
+            'text="Enqueued the load of visit_id=150844, which judges its twilight sequence if complete"'
+        ]
 
-    def test_status_says_where_it_judges(self, judgingCmd, cmd):
+    def test_status_says_who_judges(self, judgingCmd, cmd):
         judgingCmd.status(cmd)
-        assert cmd.informs[-1].startswith("text=\"twilight: judging each visit's sequence with")
+        assert cmd.informs[-1].startswith("text=\"twilight: the load of a sequence's last visit judges it")
 
     def test_without_a_db_opdb_the_command_fails(self, qaCmd, controller):
         cmd = KeywordCmd(visit_id=150844)
@@ -321,3 +325,17 @@ class TestTwilight:
         assert cmd.finishes == [] and controller.queue_size() == 0
         (failure,) = cmd.fails
         assert failure == 'text="cannot judge twilight sequences: the config has no db.opdb (actors.yaml)"'
+
+    def test_with_loading_off_the_command_fails(self, judgingCmd):
+        controller = judgingCmd._get_controller()
+        controller.set_qadb_load(False)
+        cmd = KeywordCmd(visit_id=150844)
+        judgingCmd.twilight(cmd)
+        assert cmd.finishes == [] and controller.queue_size() == 0
+        (failure,) = cmd.fails
+        assert failure == 'text="cannot load visit_id=150844: qadb: not loading (switched off)"'
+        # Negative control: switched back on, the same command is accepted.
+        controller.set_qadb_load(True)
+        cmd = KeywordCmd(visit_id=150844)
+        judgingCmd.twilight(cmd)
+        assert cmd.fails == [] and controller.queue_size() == 1
