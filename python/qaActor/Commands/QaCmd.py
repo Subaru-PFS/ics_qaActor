@@ -94,18 +94,26 @@ class QaCmd:
         cmd.finish(f"text={qstr(message)}")
 
     def twilight(self, cmd):
-        """Judge a visit's twilight sequence now, without re-running its QA.
+        """Load a visit into qadb again, without re-running its QA; the load judges its twilight sequence.
 
-        For a sequence the automatic call missed: the actor was down for its last visit, that visit's
-        reduction was never reported, its status row came late, or the qadb write failed. The judge
-        still checks that the sequence is a finished twilight with every visit's tables stored.
+        The command keeps its name from when a separate judge ran: drp_qa's loader now judges a
+        twilight sequence itself, when a load finds it complete. This is for a sequence whose last
+        visit went through QA but whose load did not judge it: the load failed, loading was off, or
+        the sequence's status row came late. A visit the actor never processed (it was down, or the
+        reduction was never reported) has no QA tables to load: `qa process <visit>` runs its QA and
+        then the load. It loads any visit, twilight or not, and needs both databases: db.opdb to find
+        the sequence, and qadb loading on.
         """
         visit_id = int(cmd.cmd.keywords["visit_id"].values[0])
         controller = self._get_controller()
-        if controller.twilight_cmd(visit_id) is None:
+        if controller.opdb_host is None:
             message = "cannot judge twilight sequences: the config has no db.opdb (actors.yaml)"
             cmd.fail(f"text={qstr(message)}")
             return
-        self.actor.logger.info(f"Manually enqueuing the twilight judgement of {visit_id=}")
-        controller.enqueue_twilight(visit_id)
-        cmd.finish(f'text="Enqueued the twilight judgement of {visit_id=}"')
+        if controller.load_cmd(visit_id) is None:
+            message = f"cannot load {visit_id=}: {controller.describe_qadb_load()}"
+            cmd.fail(f"text={qstr(message)}")
+            return
+        self.actor.logger.info(f"Manually enqueuing the load of {visit_id=} (qa twilight)")
+        controller.enqueue_load(visit_id)
+        cmd.finish(f'text="Enqueued the load of {visit_id=}, which judges its twilight sequence if complete"')
