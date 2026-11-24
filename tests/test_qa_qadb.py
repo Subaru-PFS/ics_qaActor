@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from qaActor.Controllers.qa import DEFAULT_LOAD_TIMEOUT, qa
+from qaActor.Controllers.qa import DEFAULT_LOAD_TIMEOUT, MarkFailed, qa
 
 from .conftest import FakeActor
 from .test_qa_controller import FakePopen
@@ -284,3 +284,74 @@ class TestRunLoop:
         assert (
             "qadb load failed for visit_id=1" in caplog.text and "qadb loaded for visit_id=2" in caplog.text
         )
+
+
+class TestMarkReduceFailed:
+    """Recording a visit's reduceExposure failure in qadb (REDUCE FAILED), so the dashboard shows it."""
+
+    def test_builds_the_markReduceFailed_command(self, loading):
+        cmd = loading.mark_failed_cmd(42, 1, "FAILED")
+        assert cmd[:3] == ["python", "/opt/drp_qa/bin.src/drpQa.py", "markReduceFailed"]
+        assert cmd[cmd.index("-c") + 1] == loading.output_collection
+        assert cmd[cmd.index("--visit") + 1] == "42"
+        assert cmd[cmd.index("--return-code") + 1] == "1"
+        assert cmd[cmd.index("--status") + 1] == "FAILED"
+        # The RUN is one of this actor's own (new_run prefixes the output collection), kept apart from a
+        # real reduction's.
+        assert cmd[cmd.index("--run") + 1].startswith(loading.output_collection + "/")
+        # The opdb options follow the config: the visit's exposed cameras are read from it.
+        assert cmd[cmd.index("--opdb-host") :] == [
+            "--opdb-host", "db-ics", "--opdb-port", "5432",
+            "--opdb-user", "pfs", "--opdb-dbname", "opdb",
+        ]  # fmt: skip
+        assert all(isinstance(arg, str) for arg in cmd)
+
+    def test_omits_the_optional_return_code_and_status(self, loading):
+        cmd = loading.mark_failed_cmd(42)
+        assert "--return-code" not in cmd and "--status" not in cmd
+        # Negative control: given, they are included.
+        assert "--return-code" in loading.mark_failed_cmd(42, 1, "FAILED")
+
+    def test_without_an_opdb_there_is_nothing_to_mark(self, sharedConfig, logger, drpQaDir):
+        # No opdb means the exposed cameras cannot be read, so no verdict rows can be written.
+        del sharedConfig["db"]["opdb"]
+        sharedConfig["db"]["qadb"] = {"host": "qadb-host"}
+        assert qa(FakeActor(sharedConfig, logger), "qa").mark_failed_cmd(42, 1, "FAILED") is None
+
+    def test_without_qadb_loading_there_is_nothing_to_mark(self, controller):
+        # The `controller` fixture has no db.qadb, so loading is off.
+        assert controller.mark_failed_cmd(42, 1, "FAILED") is None
+
+    def test_runs_the_command_and_logs(self, loading, popens, caplog):
+        calls = popens(0)
+        with caplog.at_level(logging.INFO):
+            loading.mark_reduce_failed(42, 1, "FAILED")
+        assert len(calls) == 1 and calls[0][2] == "markReduceFailed"
+        assert "Marked 42 REDUCE FAILED in qadb" in caplog.text
+
+    def test_warns_when_it_cannot_run(self, controller, popens, caplog):
+        calls = popens(0)
+        with caplog.at_level(logging.INFO):
+            controller.mark_reduce_failed(42, 1, "FAILED")
+        assert calls == []  # nothing is run when there is no qadb/opdb
+        assert "Not marking 42 REDUCE FAILED" in caplog.text
+
+    def test_warns_on_a_subprocess_failure(self, loading, popens, caplog):
+        popens(2)
+        with caplog.at_level(logging.INFO):
+            loading.mark_reduce_failed(42, 1, "FAILED")
+        assert "Marking 42 REDUCE FAILED failed (returncode 2)" in caplog.text
+
+    def test_a_queued_mark_failed_item_runs_the_marker(self, loading, popens, caplog):
+        calls = popens(0)
+        loading.processing_queue.put(MarkFailed(42, 1, "FAILED"))
+        loading.stop()
+        with caplog.at_level(logging.INFO):
+            loading.run()
+        assert len(calls) == 1 and calls[0][2] == "markReduceFailed"
+        assert cmd_has(calls[0], "--visit", "42")
+
+
+def cmd_has(cmd, flag, value):
+    """Whether ``cmd`` carries ``flag`` immediately followed by ``value``."""
+    return flag in cmd and cmd[cmd.index(flag) + 1] == value

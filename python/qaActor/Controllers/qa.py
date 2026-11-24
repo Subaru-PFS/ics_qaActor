@@ -33,6 +33,10 @@ DEFAULT_LOADER = "$DRP_QA_DIR/bin.src/drpQa.py"
 #: The subcommand of the loader the actor runs.
 LOAD_SUBCOMMAND = "load"
 
+#: The loader subcommand that records a visit's reduceExposure failure in qadb (REDUCE FAILED), so the
+#: dashboard shows the failure instead of leaving the visit awaiting QA (PIPE2D-2036).
+MARK_FAILED_SUBCOMMAND = "markReduceFailed"
+
 
 @dataclass(frozen=True)
 class LoadVisit:
@@ -44,6 +48,19 @@ class LoadVisit:
 @dataclass(frozen=True)
 class DefineChain:
     """A queue item asking for the output chain to be defined (or repaired): put first at start."""
+
+
+@dataclass(frozen=True)
+class MarkFailed:
+    """A queue item asking that a visit's reduceExposure failure be recorded in qadb (REDUCE FAILED).
+
+    The `Drp` model enqueues it when ``reduceExposureStatus`` reports a non-zero returnCode, so QA is
+    skipped but the dashboard still shows the failure rather than leaving the visit awaiting QA.
+    """
+
+    visit: int
+    return_code: int | None = None
+    status: str = ""
 
 
 class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController
@@ -249,6 +266,17 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
                 except Exception as e:
                     self.logger.warning(f"Error defining the output chain: {e}")
                 continue
+
+            if isinstance(item, MarkFailed):
+                try:
+                    self._current_visit = item.visit
+                    self.mark_reduce_failed(item.visit, item.return_code, item.status)
+                except Exception as e:
+                    self.logger.warning(f"Error marking {item.visit} REDUCE FAILED: {e}")
+                finally:
+                    self._current_visit = None
+                continue
+
             visit_id = item.visit if isinstance(item, LoadVisit) else item
             try:
                 self._current_visit = visit_id
@@ -433,6 +461,59 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
             self.logger.warning(f"Failed command: {' '.join(cmd)}")
         else:
             self.logger.info(f"qadb loaded for {visit_id=}")
+
+    def mark_failed_cmd(self, visit_id, return_code=None, status=""):
+        """Build the command recording a visit's reduceExposure failure in qadb; None when it cannot run.
+
+        Needs qadb loading on and an opdb (the visit's exposed cameras are read from it, one verdict row
+        per detector). The RUN is one of this actor's own (`new_run`), so the marker's processing is kept
+        apart from a real reduction's. The loader subcommand is `markReduceFailed` (`MARK_FAILED_SUBCOMMAND`).
+        """
+        if not self.qadb_load or not self.opdb_host:
+            return None
+        # fmt: off
+        cmd = [
+            "python", self.loader_path, MARK_FAILED_SUBCOMMAND,
+            "-c", self.output_collection,
+            "--run", self.new_run(visit_id),
+            "--visit", f"{visit_id}",
+            "--host", f"{self.qadb['host']}",
+            "--port", f"{self.qadb.get('port', 5436)}",
+            "--user", f"{self.qadb.get('user', 'pfs')}",
+            "--dbname", f"{self.qadb.get('dbname', 'qadb')}",
+        ]
+        # fmt: on
+        if return_code is not None:
+            cmd += ["--return-code", f"{return_code}"]
+        if status:
+            cmd += ["--status", f"{status}"]
+        cmd += self.opdb_args()
+        return cmd
+
+    def mark_reduce_failed(self, visit_id, return_code=None, status=""):
+        """Record a visit's reduceExposure failure in qadb (REDUCE FAILED), and log the outcome.
+
+        Skipped, with a log line, when qadb loading is off or there is no opdb. Re-running writes a fresh
+        marker RUN (the latest wins in the dashboard, as for a re-reduced visit), and a failure is only
+        logged, like `load_qadb`: it must not stop the loop.
+        """
+        cmd = self.mark_failed_cmd(visit_id, return_code, status)
+        if cmd is None:
+            self.logger.warning(
+                f"Not marking {visit_id} REDUCE FAILED (needs qadb loading on and an opdb): "
+                f"{self.describe_qadb_load()}"
+            )
+            return
+
+        def watchdog(process, visit_id, timed_out):
+            return self._start_watchdog(process, visit_id, timed_out, self.load_timeout, "mark reduce-failed")
+
+        returncode, _timed_out = self._run_streamed(cmd, visit_id, watchdog)
+        if returncode != 0:
+            self.logger.warning(f"Marking {visit_id} REDUCE FAILED failed (returncode {returncode})")
+            self.logger.warning(f"Failed command: {' '.join(cmd)}")
+        else:
+            self.logger.info(f"Marked {visit_id} REDUCE FAILED in qadb")
 
     def _run_streamed(self, cmd, visit_id, start_watchdog):
         """Run `cmd`, relaying its output to the log, under a watchdog.

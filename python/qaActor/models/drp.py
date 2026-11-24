@@ -2,6 +2,8 @@ import queue
 
 from actorcore.Actor import Actor
 
+from qaActor.Controllers.qa import MarkFailed
+
 
 class Drp:
     def __init__(self, *, actor: Actor, logger):
@@ -57,6 +59,26 @@ class Drp:
         )
         return False
 
+    def _enqueue_mark_failed(self, visit_id, value_list):
+        """Enqueue a request to record the visit's reduceExposure failure in qadb (REDUCE FAILED).
+
+        QA is skipped on a failed reduction, but the failure is still put on the processing queue so the
+        controller records it — the dashboard then shows REDUCE FAILED instead of leaving the visit awaiting
+        QA forever. ``value_list`` is the key's ``(visit, returnCode, statusStr, timing)``.
+        """
+        return_code = int(value_list[1]) if len(value_list) > 1 and value_list[1] is not None else None
+        status = str(value_list[2]) if len(value_list) > 2 and value_list[2] is not None else ""
+        try:
+            processing_queue = self.queue
+        except KeyError:
+            self.logger.warning(
+                f"check_reduced_exposure_status: QA controller is not attached, "
+                f"not marking {visit_id} REDUCE FAILED"
+            )
+            return
+        processing_queue.put(MarkFailed(visit_id, return_code, status))
+        self.logger.info(f"Enqueued {visit_id} to be marked REDUCE FAILED")
+
     def check_reduced_exposure_status(self, key):
         """Check the reduced exposure status key and add visit_ids to the processing queue.
 
@@ -105,6 +127,8 @@ class Drp:
             # exactly why this is worth pinning: the day it reports a failure,
             # the default must not be to reduce-then-QA regardless.
             if not self._reduction_succeeded(visit_id, key.valueList):
+                # Record the failure in qadb so the dashboard shows REDUCE FAILED, not awaiting QA.
+                self._enqueue_mark_failed(visit_id, key.valueList)
                 return
 
             try:

@@ -6,6 +6,15 @@ the notes of those before 0.5.0 are in the tags' messages (`git tag -n1`).
 
 ## [Unreleased]
 
+### Added
+
+- **reduceExposure failures are recorded in qadb** (PIPE2D-2036) — when `reduceExposureStatus` reports a
+  non-zero returnCode the actor still skips QA, but it now enqueues the failure and the controller runs
+  `drpQa.py markReduceFailed`, which writes a `REDUCE FAILED` verdict to qadb for each detector the visit
+  exposed (under this actor's collection and a RUN of its own). The dashboard then shows the failure instead
+  of leaving the visit awaiting QA. Needs qadb loading on and an opdb (the exposed cameras are read from it),
+  and drp_qa with the `markReduceFailed` subcommand; without them the failure is only logged, as before.
+
 ## [0.5.0]
 
 ### Changed
