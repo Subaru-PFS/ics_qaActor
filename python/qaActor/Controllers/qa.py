@@ -493,8 +493,9 @@ class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC
     def mark_reduce_failed(self, visit_id, return_code=None, status=""):
         """Record a visit's reduceExposure failure in qadb (REDUCE FAILED), and log the outcome.
 
-        Skipped, with a log line, when qadb loading is off or there is no opdb. Idempotent, and a failure
-        is only logged, like `load_qadb`: it must not stop the loop.
+        Skipped, with a log line, when qadb loading is off or there is no opdb. Re-running writes a fresh
+        marker RUN (the latest wins in the dashboard, as for a re-reduced visit), and a failure is only
+        logged, like `load_qadb`: it must not stop the loop.
         """
         cmd = self.mark_failed_cmd(visit_id, return_code, status)
         if cmd is None:
