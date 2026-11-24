@@ -11,6 +11,7 @@ import types as pytypes
 import opscore.protocols.types as types
 import pytest
 
+from qaActor.Controllers.qa import MarkFailed
 from qaActor.models.drp import Drp
 
 from .conftest import FakeKey
@@ -168,9 +169,14 @@ class TestReductionReturnCode:
         drp.check_reduced_exposure_status(reduceExposureStatus(12345, returnCode=0))
         assert processingQueue.get_nowait() == 12345
 
-    def test_a_failed_reduction_is_skipped(self, drp, processingQueue):
-        drp.check_reduced_exposure_status(reduceExposureStatus(12345, returnCode=1))
-        assert processingQueue.empty()
+    def test_a_failed_reduction_skips_qa_but_is_marked(self, drp, processingQueue):
+        drp.check_reduced_exposure_status(reduceExposureStatus(12345, returnCode=1, statusStr="FAILED"))
+        item = processingQueue.get_nowait()
+        # QA is skipped: the item is a REDUCE FAILED marker, not a bare visit id to run QA over.
+        assert isinstance(item, MarkFailed)
+        assert item.visit == 12345 and item.return_code == 1 and item.status == "FAILED"
+        # Negative control: not a bare visit id (which would run QA), and nothing else is queued.
+        assert item != 12345 and processingQueue.empty()
 
     def test_a_failed_reduction_is_reported_with_its_status(self, drp, caplog):
         with caplog.at_level(logging.INFO):
@@ -182,8 +188,10 @@ class TestReductionReturnCode:
         assert [r for r in caplog.records if r.levelno == logging.WARNING]
 
     @pytest.mark.parametrize("returnCode", [1, 2, -1, 255])
-    def test_every_non_zero_code_is_skipped(self, drp, processingQueue, returnCode):
+    def test_every_non_zero_code_is_marked_not_run(self, drp, processingQueue, returnCode):
         drp.check_reduced_exposure_status(reduceExposureStatus(1, returnCode=returnCode))
+        item = processingQueue.get_nowait()
+        assert isinstance(item, MarkFailed) and item.return_code == returnCode
         assert processingQueue.empty()
 
     def test_a_payload_with_no_return_code_is_still_enqueued(self, drp, processingQueue):
@@ -196,16 +204,16 @@ class TestReductionReturnCode:
         drp.check_reduced_exposure_status(FakeKey(valueList=[intValue(12345), None]))
         assert processingQueue.get_nowait() == 12345
 
-    def test_a_failed_reduction_never_reaches_the_controller_lookup(self, actor, logger, caplog):
-        # No controller attached at all: if the returnCode guard runs first, this
-        # reports the reduction failure rather than a missing controller.
+    def test_a_failed_reduction_with_no_controller_reports_and_does_not_raise(self, actor, logger, caplog):
+        # No controller attached at all: the reduction failure is still reported, and the attempt to
+        # record it as REDUCE FAILED warns about the missing controller rather than raising.
         model = Drp(actor=actor, logger=logger)
 
         with caplog.at_level(logging.INFO):
             model.check_reduced_exposure_status(reduceExposureStatus(12345, returnCode=1))
 
         assert "skipping QA" in caplog.text
-        assert "not attached" not in caplog.text
+        assert "not marking 12345 REDUCE FAILED" in caplog.text
 
 
 class TestPayloadFragility:
