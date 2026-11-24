@@ -6,6 +6,8 @@ the notes of those before 0.5.0 are in the tags' messages (`git tag -n1`).
 
 ## [Unreleased]
 
+## [0.6.0]
+
 ### Added
 
 - **reduceExposure failures are recorded in qadb** (PIPE2D-2036) — when `reduceExposureStatus` reports a
