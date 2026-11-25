@@ -2,7 +2,7 @@ import queue
 
 from actorcore.Actor import Actor
 
-from qaActor.Controllers.qa import MarkFailed
+from qaActor.queue_items import MarkFailed
 
 
 class Drp:

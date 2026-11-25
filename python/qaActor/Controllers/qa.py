@@ -4,8 +4,15 @@ import queue
 import re
 import subprocess
 import threading
-from dataclasses import dataclass
 from datetime import UTC, datetime
+
+# Queue-item types live in their own module, not here: `attachController` reloads this
+# controller module on every attach, which would give each class a new identity and break
+# the `isinstance` checks below against items the long-lived `Drp` model enqueued. Re-exported
+# so `from qaActor.Controllers.qa import MarkFailed` keeps resolving to the one stable class.
+from qaActor.queue_items import DefineChain, LoadVisit, MarkFailed
+
+__all__ = ["DefineChain", "LoadVisit", "MarkFailed", "qa"]
 
 #: A `$VAR` or `${VAR}` that `os.path.expandvars` left behind, meaning it was unset.
 UNEXPANDED_VAR = re.compile(r"\$\{?\w+")
@@ -36,31 +43,6 @@ LOAD_SUBCOMMAND = "load"
 #: The loader subcommand that records a visit's reduceExposure failure in qadb (REDUCE FAILED), so the
 #: dashboard shows the failure instead of leaving the visit awaiting QA (PIPE2D-2036).
 MARK_FAILED_SUBCOMMAND = "markReduceFailed"
-
-
-@dataclass(frozen=True)
-class LoadVisit:
-    """A queue item asking for a visit's load alone, without its QA: `qa twilight <visit>`."""
-
-    visit: int
-
-
-@dataclass(frozen=True)
-class DefineChain:
-    """A queue item asking for the output chain to be defined (or repaired): put first at start."""
-
-
-@dataclass(frozen=True)
-class MarkFailed:
-    """A queue item asking that a visit's reduceExposure failure be recorded in qadb (REDUCE FAILED).
-
-    The `Drp` model enqueues it when ``reduceExposureStatus`` reports a non-zero returnCode, so QA is
-    skipped but the dashboard still shows the failure rather than leaving the visit awaiting QA.
-    """
-
-    visit: int
-    return_code: int | None = None
-    status: str = ""
 
 
 class qa(threading.Thread):  # noqa: N801 — name must match the module for ICC.attachController

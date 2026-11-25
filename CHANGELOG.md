@@ -6,6 +6,16 @@ the notes of those before 0.5.0 are in the tags' messages (`git tag -n1`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A reduceExposure failure is no longer mishandled as a visit after a hub reconnect** (PIPE2D-2036) —
+  the queue-item types (`MarkFailed`, `LoadVisit`, `DefineChain`) moved from the `qa` controller module
+  to a new `qaActor.queue_items` module. `ICC.attachController` reloads the controller module on every
+  attach (so on every hub reconnect), which gave the reloaded controller a `MarkFailed` class distinct
+  from the one the once-built `Drp` model enqueues; the controller's `isinstance` check then missed it
+  and ran `pipetask`/`drpQa.py load` with the whole `MarkFailed(...)` object as the visit id. The types
+  now live in a module `attachController` never reloads, so producer and consumer share one class.
+
 ## [0.6.0]
 
 ### Added
