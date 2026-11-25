@@ -6,6 +6,8 @@ the notes of those before 0.5.0 are in the tags' messages (`git tag -n1`).
 
 ## [Unreleased]
 
+## [0.6.1]
+
 ### Fixed
 
 - **A reduceExposure failure is no longer mishandled as a visit after a hub reconnect** (PIPE2D-2036) —
